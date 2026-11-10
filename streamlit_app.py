@@ -167,11 +167,12 @@ def tab_card(inp: al.PlanInput) -> None:
                                                     key="card_waist")
     use_range = kind == "scale_fat_percent" and prep.fat is not None and prep.fat.profile_range is not None and \
         st.checkbox("Με στόχο το εύρος λίπους του προφίλ σου", key="card_range")
-    st.write("Γράψε τις μετρήσεις σου. Κάθε μέτρηση χρειάζεται συσκευή ή μέθοδο· αν αλλάξεις συσκευή, "
-             "η σύγκριση ξεκινά από την αρχή.")
+    st.write("Γράψε την ίδια μέτρηση σε διαφορετικές ημερομηνίες. Κάθε μέτρηση χρειάζεται συσκευή ή μέθοδο· "
+             "αν αλλάξεις συσκευή, η σύγκριση ξεκινά από την αρχή.")
+    st.caption("Πάτα το «+» πάνω δεξιά στον πίνακα για νέα γραμμή.")
     rows = st.data_editor(
-        pd.DataFrame({"Ημερομηνία": pd.to_datetime([None] * 3), "Τιμή": [float("nan")] * 3,
-                      "Συσκευή / μέθοδος": [""] * 3, "ISAK": [False] * 3}),
+        pd.DataFrame({"Ημερομηνία": pd.Series(dtype="datetime64[ns]"), "Τιμή": pd.Series(dtype="float64"),
+                      "Συσκευή / μέθοδος": pd.Series(dtype="object"), "ISAK": pd.Series(dtype="bool")}),
         num_rows="dynamic", key="card_rows",
         column_config={"Ημερομηνία": st.column_config.DateColumn("Ημερομηνία", format="DD/MM/YYYY"),
                        "Τιμή": st.column_config.NumberColumn("Τιμή", min_value=0.0, format="%.1f"),
@@ -196,6 +197,49 @@ def tab_card(inp: al.PlanInput) -> None:
         st.caption(card.info)
 
 
+# ------------------------------------------------------------------ μετρήσεις (Στοιχεία 05–39, σε δόσεις)
+def guide_box(field: str) -> None:
+    g = measurement.guide(field)
+    if g is None:
+        return
+    with st.expander(f"ⓘ {g.title}"):
+        for i, step in enumerate(g.steps, start=1):
+            st.markdown(f"{i}. {step}")
+
+
+def measure_input(label: str, key: str, field: str, *, min_value: float = 0.1, max_value: float | None = None):
+    v = st.number_input(label, min_value=min_value, max_value=max_value, value=None, step=0.1, format="%.1f", key=key)
+    guide_box(field)
+    return v
+
+
+def show_section(sec: al.Section) -> None:
+    st.subheader(sec.title)
+    if sec.indicative:
+        st.warning("Ενδεικτική")
+    for label, value in sec.lines:
+        st.markdown(f"**{label}:** {value}")
+    for m in sec.messages:
+        st.write(m)
+
+
+def tab_measures(inp: al.PlanInput) -> None:
+    st.caption("Συμπλήρωσε όσα έχεις μετρήσει· τα κενά πεδία παραλείπονται. "
+               "Σε κάθε πεδίο, το ⓘ δείχνει πώς μετράς.")
+    m = al.Measures(
+        waist_cm=measure_input("Περιφέρεια μέσης (cm)", "m_waist", "μέση"),
+        upper_thigh_cm=measure_input("Περιφέρεια άνω μηρού (cm)", "m_thigh", "άνω μηρός"),
+        scale_visceral_level=measure_input("Σπλαχνικό λίπος — τιμή ζυγαριάς (χωρίς μονάδα)", "m_visceral",
+                                           "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0),
+        scale_muscle_percent=measure_input("Μύες % (ζυγαριά)", "m_muscle", "μύες % (ζυγαριά)", max_value=99.9),
+    )
+    sections, errors = al.measurement_sections(inp, m)
+    for e in errors:
+        st.error(e)
+    for sec in sections:
+        show_section(sec)
+
+
 # ------------------------------------------------------------------ οδηγίες μέτρησης
 def tab_guides() -> None:
     field = st.selectbox("Τι θέλεις να μετρήσεις;", list(measurement.fields()), key="guide_field")
@@ -212,10 +256,13 @@ def tab_guides() -> None:
 
 # ------------------------------------------------------------------ σελίδα
 inputs = read_inputs()
-tab1, tab2, tab3 = st.tabs(["Πλάνο", "Κάρτα μέτρησης", "Οδηγίες μέτρησης"])
+tab1, tab_m, tab2, tab3 = st.tabs(["Πλάνο", "Μετρήσεις", "Κάρτα μέτρησης", "Οδηγίες μέτρησης"])
 with tab1:
     if inputs is not None:
         tab_plan(inputs)
+with tab_m:
+    if inputs is not None:
+        tab_measures(inputs)
 with tab2:
     if inputs is not None:
         tab_card(inputs)

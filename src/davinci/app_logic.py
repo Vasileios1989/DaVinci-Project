@@ -275,3 +275,119 @@ def clean_rows(records: list[dict]) -> list[tuple[date, float, str, bool]]:
             day = day.date()
         out.append((day, float(value), "" if _blank(method) else str(method), bool(r.get("ISAK") or False)))
     return out
+
+
+# --- Καρτέλα «Μετρήσεις» (Στοιχεία 05–39, σε δόσεις) -------------------------------------------------------
+@dataclass(frozen=True)
+class Measures:
+    """Μετρήσεις της φόρμας· None = δεν μετρήθηκε."""
+    waist_cm: float | None = None
+    upper_thigh_cm: float | None = None
+    scale_visceral_level: float | None = None
+    scale_muscle_percent: float | None = None
+
+
+@dataclass(frozen=True)
+class Section:
+    title: str
+    lines: tuple[tuple[str, str], ...] = ()
+    messages: tuple[str, ...] = ()
+    indicative: bool = False
+
+
+def _n(x: float, d: int = 1) -> str:
+    from davinci.fmt import num
+    return num(x, d)
+
+
+def _below(x: float) -> str:
+    """Τιμή «κάτω από»: στρογγυλεύεται προς τα κάτω, ώστε η εμφανιζόμενη τιμή να είναι πράγματι κάτω από το όριο
+    (όπως το «≈ 109,6 kg» του Πίνακα 8 του Στοιχείου 05 για όριο 109,65)."""
+    from decimal import ROUND_FLOOR, Decimal
+    return _n(float(Decimal(repr(x)).quantize(Decimal("0.1"), rounding=ROUND_FLOOR)))
+
+
+def _dedupe(msgs) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(m for m in msgs if m))
+
+
+def section_waist(m: Measures, user: e01.UserCategories, weight_kg: float) -> Section | None:
+    """Στοιχείο 05 (Πίνακες 2, 3, 6 · Κανόνες 1–5)."""
+    from davinci import element_05 as e05
+    if m.waist_cm is None:
+        return None
+    r = e05.assess(m.waist_cm, weight_kg, user)
+    lines = [("Περιφέρεια μέσης", f"{_n(r.waist_cm)} cm"), ("Λόγος μέσης/ύψους", _n(r.ratio, 2))]
+    if r.category:
+        lines.append(("Ταξινόμηση", r.category + (f" — {r.meaning}" if r.meaning else "")))
+    if r.max_weight_for_classification_kg is not None:  # Κανόνας 1 (Πίνακας 8)
+        lines.append(("Πότε αρχίζει η ταξινόμηση",
+                      f"Όταν ο ΔΜΣ πέσει κάτω από 35 (βάρος κάτω από ≈ {_below(r.max_weight_for_classification_kg)} kg)"))
+    if not user.pregnant_or_breastfeeding:  # Στοιχείο 01: εγκυμοσύνη/θηλασμός χωρίς στόχους
+        lines.append(("Μέση-στόχος", f"κάτω από {_below(r.target_waist_below_cm)} cm"))
+        if r.distance_to_target_cm > 0:
+            lines.append(("Απόσταση από τον στόχο", f"{_n(r.distance_to_target_cm)} cm"))
+    return Section("Μέση (Στοιχείο 05)", tuple(lines), _dedupe(r.messages))
+
+
+def section_visceral(m: Measures, user: e01.UserCategories, weight_kg: float) -> Section | None:
+    """Στοιχείο 06 (Πίνακες 2, 5 · Κανόνες 1–4)."""
+    from davinci import element_06 as e06
+    if m.waist_cm is None and m.upper_thigh_cm is None and m.scale_visceral_level is None:
+        return None
+    r = e06.assess(user, weight_kg, waist_cm=m.waist_cm, upper_thigh_cm=m.upper_thigh_cm,
+                   scale_level=m.scale_visceral_level)
+    lines: list[tuple[str, str]] = []
+    if r.source == e06.EQUATION:  # Κανόνας 3
+        lo, hi = r.range_cm2
+        lines.append((f"Σπλαχνικό λίπος ({r.label})", f"≈ {_n(r.value, 0)} cm² (εύρος {_n(lo, 0)} – {_n(hi, 0)})"))
+        lines.append(("Ταξινόμηση", r.category))
+    elif r.source == e06.SCALE:  # Κανόνας 2: χωρίς μονάδα, χωρίς ταξινόμηση
+        lines.append((f"Σπλαχνικό λίπος ({r.label})", _n(r.value)))
+    if r.source != e06.SCALE and r.scale_level is not None:  # Κανόνας 2: καταγράφεται πάντα
+        lines.append(("Τιμή ζυγαριάς (χωρίς μονάδα)", _n(r.scale_level)))
+    if not lines and not r.messages:
+        return None
+    return Section("Σπλαχνικό λίπος (Στοιχείο 06)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def section_muscle(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section:
+    """Στοιχείο 07 (Πίνακας 3 · Κανόνες 1–7 · Συμπλήρωμα Α)· στόχος μόνο όταν το Στοιχείο 03 δίνει άλιπη-στόχο."""
+    from davinci import element_07 as e07
+    r = e07.assess(weight_kg, fat_percent, user, scale_percent=m.scale_muscle_percent)
+    if r.muscle_kg is None:
+        return Section("Σκελετικοί μύες (Στοιχείο 07)", (), _dedupe(r.messages), r.indicative)
+    lines = [("Σκελετικοί μύες", f"{_n(r.muscle_kg)} kg ({r.source})"),
+             ("% της άλιπης μάζας", f"{_n(r.pct_of_ffm)}%"),
+             ("% του βάρους (πληροφορία)", f"{_n(r.pct_of_weight)}%"),
+             ("Δείκτης Σκελετικών Μυών (ΔΣΜ)", f"{_n(r.smi)} kg/m²")]
+    if r.category:
+        lines.append(("Ταξινόμηση", r.category + (f" ({r.out_of_reference_label})" if r.out_of_reference_label else "")))
+    if r.dry_muscle_kg is not None:
+        lo, hi = r.dry_muscle_range_kg
+        lines.append(("Ξηροί μύες (εκτίμηση)", f"≈ {_n(r.dry_muscle_kg)} kg (εύρος {_n(lo)} – {_n(hi)})"))
+    msgs = list(r.messages)
+    # Το Στοιχείο 03 δεν δίνει στόχο σε ανηλίκους, εγκυμοσύνη/θηλασμό ή λίπος μέσα στο εύρος (Κανόνας 8).
+    wt = e03.weight_target(weight_kg, fat_percent, user)
+    if wt.status == "υπολογίστηκε":  # Κανόνας 5 με την άλιπη-στόχο της Φάσης 1
+        ffm_now = e03.ffm(weight_kg, fat_percent)
+        ts = [e07.target(r.muscle_kg, ffm_now, p.ffm_kg) for p in wt.points]
+        h2 = (user.height_cm / 100) ** 2
+        lines.append(("Ενδεικτικός στόχος μυών",
+                      " → ".join(f"≈ {_n(t.muscle_kg)} kg (ΔΣΜ ≈ {_n(t.muscle_kg / h2)})" for t in ts)))
+        lines.append(("Ξηροί μύες-στόχος", " → ".join(f"≈ {_n(t.dry_muscle_kg)} kg" for t in ts)))
+        msgs += [x for t in ts for x in t.messages]
+        msgs += wt.messages  # η άλιπη-στόχος είναι εκτίμηση του Στοιχείου 03 (π.χ. «ενδεικτική»)
+    indicative = r.indicative or wt.indicative
+    return Section("Σκελετικοί μύες (Στοιχείο 07)", tuple(lines), _dedupe(msgs), indicative)
+
+
+def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ...], tuple[str, ...]]:
+    """Όλες οι ενότητες της καρτέλας «Μετρήσεις»· επιστρέφει (ενότητες, σφάλματα)."""
+    try:
+        user = _user(inp)
+        out = [section_waist(m, user, inp.weight_kg), section_visceral(m, user, inp.weight_kg),
+               section_muscle(m, user, inp.weight_kg, inp.fat_percent)]
+    except (e01.InvalidInput, ValueError, LookupError) as exc:
+        return (), (str(exc),)
+    return tuple(s for s in out if s is not None), ()

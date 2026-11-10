@@ -374,3 +374,162 @@ def test_files_for_deployment_exist():
 def test_no_removed_streamlit_parameters():
     # «use_container_width» ανακοινώθηκε ότι αφαιρείται από το Streamlit (μετά τις 31/12/2025)
     assert "use_container_width" not in (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+
+
+# ================================================================ Δόση 1: καρτέλα «Μετρήσεις» (05, 06, 07)
+from davinci import element_06 as e06  # noqa: E402
+from davinci import element_07 as e07  # noqa: E402
+
+
+def man37(**kw):
+    base = dict(birth_date=date(1989, 1, 1), sex="Άνδρας", height_cm=177.0, weight_kg=138.9, fat_percent=60.0 / 138.9 * 100,
+                today=TODAY, ancestry="1")
+    base.update(kw)
+    return al.PlanInput(**base)
+
+
+def sec(inp_, m, title_start):
+    secs, errs = al.measurement_sections(inp_, m)
+    assert errs == ()
+    found = [s for s in secs if s.title.startswith(title_start)]
+    return found[0] if found else None
+
+
+def test_e05_document_table8_bmi_35():
+    s = sec(man37(), al.Measures(waist_cm=146.0), "Μέση")
+    d = dict(s.lines)
+    assert d["Λόγος μέσης/ύψους"] == "0,82" and "Ταξινόμηση" not in d
+    assert d["Πότε αρχίζει η ταξινόμηση"] == "Όταν ο ΔΜΣ πέσει κάτω από 35 (βάρος κάτω από ≈ 109,6 kg)"
+    assert d["Μέση-στόχος"] == "κάτω από 88,5 cm" and d["Απόσταση από τον στόχο"] == "57,5 cm"
+    assert s.messages == (e05_msgs()["bmi_35"],)
+
+
+def e05_msgs():
+    from davinci import element_05 as e05
+    return e05.load_data()["messages"]
+
+
+def test_e05_classification_profile_message_and_target_reached():
+    s = sec(man37(weight_kg=80.0, fat_percent=20.0, profile="Αθλητικό"), al.Measures(waist_cm=86.0), "Μέση")
+    d = dict(s.lines)
+    assert d["Ταξινόμηση"] == "Υγιής κεντρική λιπώδης μάζα — Χωρίς αυξημένο κίνδυνο για την υγεία"
+    assert "Απόσταση από τον στόχο" not in d and s.messages == (e05_msgs()["profile_target"],)
+    low = sec(man37(weight_kg=60.0, fat_percent=15.0), al.Measures(waist_cm=60.0), "Μέση")
+    assert dict(low.lines)["Ταξινόμηση"] == "Κάτω από το εύρος της ταξινόμησης" and low.messages == (e05_msgs()["below_040"],)
+
+
+def test_e05_pregnancy_no_category_no_target():
+    s = sec(man37(sex="Γυναίκα", pregnant=True, weight_kg=70.0, fat_percent=30.0), al.Measures(waist_cm=95.0), "Μέση")
+    assert [k for k, _ in s.lines] == ["Περιφέρεια μέσης", "Λόγος μέσης/ύψους"]
+
+
+def test_below_rounds_down():
+    assert al._below(88.65) == "88,6" and al._below(88.5) == "88,5" and al._below(85.1) == "85,1"
+    s = sec(man37(height_cm=177.3, weight_kg=80.0, fat_percent=20.0), al.Measures(waist_cm=90.0), "Μέση")
+    assert dict(s.lines)["Μέση-στόχος"] == "κάτω από 88,6 cm"
+
+
+@pytest.mark.parametrize("thigh, est, rng", [(70.0, "398", "350 – 445"), (75.0, "376", "328 – 423"),
+                                             (80.0, "354", "306 – 401")])
+def test_e06_document_table8(thigh, est, rng):
+    s = sec(man37(), al.Measures(waist_cm=146.0, upper_thigh_cm=thigh), "Σπλαχνικό")
+    assert s.lines[0] == ("Σπλαχνικό λίπος (Εκτίμηση)", f"≈ {est} cm² (εύρος {rng})")
+    assert s.lines[1] == ("Ταξινόμηση", "Αυξημένος κίνδυνος (εκτίμηση)") and s.indicative
+    assert s.messages == (e06.load_data()["messages"]["threshold"],)
+
+
+def test_e06_scale_only_and_missing_thigh_and_scale_recorded():
+    m6 = e06.load_data()["messages"]
+    s = sec(man37(), al.Measures(scale_visceral_level=12.0), "Σπλαχνικό")
+    assert s.lines == (("Σπλαχνικό λίπος (Τιμή ζυγαριάς)", "12,0"),) and s.messages == (m6["scale"],)
+    s2 = sec(man37(), al.Measures(waist_cm=100.0), "Σπλαχνικό")
+    assert s2.lines == () and s2.messages == (m6["no_thigh"],)
+    s3 = sec(man37(), al.Measures(waist_cm=146.0, upper_thigh_cm=70.0, scale_visceral_level=8.0), "Σπλαχνικό")
+    assert s3.lines[-1] == ("Τιμή ζυγαριάς (χωρίς μονάδα)", "8,0") and len(s3.lines) == 3
+    assert sec(man37(), al.Measures(), "Σπλαχνικό") is None
+    minor = sec(man37(birth_date=date(2012, 1, 1), profile="Υγεία"), al.Measures(waist_cm=80.0, upper_thigh_cm=50.0),
+                "Σπλαχνικό")
+    assert minor.lines == () and minor.messages == (m6["minor"],)
+    thigh_only = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(upper_thigh_cm=50.0), "Σπλαχνικό")
+    assert thigh_only.messages == (m6["minor"],)
+
+
+def test_e07_document_table8_and_dry_muscle():
+    s = sec(man37(weight_kg=139.1, fat_percent=42.9), al.Measures(scale_muscle_percent=30.0),
+            "Σκελετικοί")
+    d = dict(s.lines)
+    assert d["Σκελετικοί μύες"] == "41,7 kg (ζυγαριά)" and d["% της άλιπης μάζας"] == "52,5%"
+    assert d["% του βάρους (πληροφορία)"] == "30,0%" and d["Δείκτης Σκελετικών Μυών (ΔΣΜ)"] == "13,3 kg/m²"
+    assert d["Ξηροί μύες (εκτίμηση)"] == "≈ 8,3 kg (εύρος 7,5 – 8,8)" and "Ταξινόμηση" not in d
+    m7 = e07.load_data()
+    assert m7["messages"]["scale"] in s.messages and m7["messages"]["age_18_59"] in s.messages
+    assert m7["messages"]["target"] in s.messages and len(set(s.messages)) == len(s.messages)
+
+
+def test_e07_target_uses_element03_points():
+    inp_ = man37(profile="Αθλητικό", resistance_training=True)
+    s = sec(inp_, al.Measures(scale_muscle_percent=30.0), "Σκελετικοί")
+    u = al._user(inp_)
+    pts = e03.weight_target(inp_.weight_kg, inp_.fat_percent, u).points
+    kg = inp_.weight_kg * 0.30
+    ts = [e07.target(kg, e03.ffm(inp_.weight_kg, inp_.fat_percent), p.ffm_kg) for p in pts]
+    from davinci.fmt import num
+    want = " → ".join(f"≈ {num(t.muscle_kg)} kg (ΔΣΜ ≈ {num(t.muscle_kg / 1.77 ** 2)})" for t in ts)
+    assert len(pts) == 2 and dict(s.lines)["Ενδεικτικός στόχος μυών"] == want
+    assert dict(s.lines)["Ξηροί μύες-στόχος"] == " → ".join(f"≈ {num(t.dry_muscle_kg)} kg" for t in ts)
+
+
+def test_e07_no_target_when_fat_in_range_minor_or_pregnant():
+    for p in (man37(weight_kg=80.0, fat_percent=15.0), man37(birth_date=date(2012, 1, 1)),
+              man37(sex="Γυναίκα", breastfeeding=True, weight_kg=70.0, fat_percent=35.0)):
+        d = dict(sec(p, al.Measures(scale_muscle_percent=35.0), "Σκελετικοί").lines)
+        assert "Ενδεικτικός στόχος μυών" not in d and "Ξηροί μύες-στόχος" not in d
+
+
+def test_e07_lee_paths():
+    m7 = e07.load_data()["messages"]
+    obese = sec(man37(), al.Measures(), "Σκελετικοί")  # ΔΜΣ ≥ 30 χωρίς ζυγαριά → καμία τιμή
+    assert obese.lines == () and obese.messages[0] == m7["lee_bmi_30"]
+    old = sec(man37(birth_date=date(1950, 1, 1), weight_kg=70.0, fat_percent=25.0), al.Measures(), "Σκελετικοί")
+    d = dict(old.lines)
+    assert d["Σκελετικοί μύες"].endswith("(εξίσωση Lee)") and d["Ταξινόμηση"] in (
+        "Φυσιολογική μυϊκή μάζα", "Χαμηλή μυϊκή μάζα", "Πολύ χαμηλή μυϊκή μάζα")
+    very_old = sec(man37(birth_date=date(1940, 1, 1), weight_kg=70.0, fat_percent=25.0), al.Measures(), "Σκελετικοί")
+    assert dict(very_old.lines)["Ταξινόμηση"].endswith("(Εκτός δεδομένων αναφοράς)") and very_old.indicative
+
+
+def test_measurement_sections_errors():
+    secs, errs = al.measurement_sections(man37(height_cm=50.0), al.Measures(waist_cm=80.0))
+    assert secs == () and errs
+
+
+def test_screen_measures_tab(monkeypatch):
+    vals = {"birth": date(1989, 1, 1), "sex": "Άνδρας", "height": 177.0, "weight": 138.9, "fat": 60.0 / 138.9 * 100,
+            "ancestry": "1", "pal": "1.4", "m_waist": 146.0, "m_thigh": 70.0, "m_muscle": 30.0, "m_visceral": 8.0}
+    f = run_app(monkeypatch, vals)
+    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    assert not f.errors
+    assert "**Λόγος μέσης/ύψους:** 0,82" in md and "**Σπλαχνικό λίπος (Εκτίμηση):** ≈ 398 cm² (εύρος 350 – 445)" in md
+    assert "**Σκελετικοί μύες:** 41,7 kg (ζυγαριά)" in md and "**Τιμή ζυγαριάς (χωρίς μονάδα):** 8,0" in md
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert {"Μέση (Στοιχείο 05)", "Σπλαχνικό λίπος (Στοιχείο 06)", "Σκελετικοί μύες (Στοιχείο 07)"} <= set(subs)
+    assert "Ενδεικτική" in [a[0] for n, a, k in f.shown if n == "warning"]
+    steps = measurement.guide("μέση").steps
+    assert md.count(f"1. {steps[0]}") >= 1  # οδηγίες δίπλα στο πεδίο
+
+
+def test_screen_card_starts_empty(monkeypatch):
+    f = run_app(monkeypatch, dict(WOMAN))
+    assert "Γράψε τουλάχιστον μία μέτρηση." in f.texts()
+
+
+def test_e07_target_carries_element03_messages():
+    m3 = e03.load_data()["messages_k0"]
+    # Αθλητικό με λίπος κάτω από το πάνω όριο και προπόνηση: στόχος λίπους πάνω από το σημερινό → Κανόνας 4α του 03
+    inp_ = man37(weight_kg=80.0, fat_percent=10.0, profile="Αθλητικό", resistance_training=True)
+    s = sec(inp_, al.Measures(scale_muscle_percent=45.0), "Σκελετικοί")
+    wt = e03.weight_target(80.0, 10.0, al._user(inp_))
+    assert wt.indicative and m3["fat_gain"] in wt.messages
+    assert m3["fat_gain"] in s.messages and s.indicative and "Ενδεικτικός στόχος μυών" in dict(s.lines)
+    plain = sec(man37(), al.Measures(scale_muscle_percent=30.0), "Σκελετικοί")
+    assert not plain.indicative and m3["fat_gain"] not in plain.messages

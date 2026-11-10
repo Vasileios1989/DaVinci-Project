@@ -804,7 +804,7 @@ def test_screen_inputs_grouped_in_categories(monkeypatch):
     assert where["Ύψος (cm)"] == top[0]
     assert {where[x] for x in ("Βάρος (kg)", "Λίπος %", "Μύες %", "Υγρά %", "Οστά %")} == {top[1]}
     assert {where[x] for x in ("Λαιμός (cm)", "Στήθος (cm)", "Μέση (cm)", "Ισχίο (cm)")} == {top[2]}
-    assert where["Άνω μηρός (cm)"] == top[3] and where["Πρωινό βάρος σήμερα (kg)"] == top[4]
+    assert where["Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)"] == top[3] and where["Πρωινό βάρος σήμερα (kg)"] == top[4]
 
 
 def test_screen_missing_fields_listed(monkeypatch):
@@ -832,7 +832,7 @@ def test_required_fields_have_no_placeholder_optional_do(monkeypatch):
     f = run_app(monkeypatch, {})
     ph = f.placeholders
     assert ph["Ύψος (cm)"] is None and ph["Βάρος (kg)"] is None and ph["Λίπος %"] is None
-    for label in ("Μύες %", "Υγρά %", "Οστά %", "Μέση (cm)", "Άνω μηρός (cm)", "Πρωινό βάρος σήμερα (kg)",
+    for label in ("Μύες %", "Υγρά %", "Οστά %", "Μέση (cm)", "Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)", "Πρωινό βάρος σήμερα (kg)",
                   "Σπλαχνικό λίπος — μόνο αν το δείχνει η ζυγαριά σου (χωρίς μονάδα)"):
         assert ph[label] == "Προαιρετικό"
 
@@ -1035,3 +1035,74 @@ def test_screen_batch4(monkeypatch):
     where = {label: g for g, label in f.inputs}
     assert where["Ώμοι (cm)"].startswith("3.") and where["Μπράτσο χαλαρό (cm)"].startswith("4.")
     assert where["Πήχης σφιγμένος (cm)"].startswith("4.") and f.placeholders["Ώμοι (cm)"] == "Προαιρετικό"
+
+
+# ================================================================ Δόση 5: 17, 18, 19
+from davinci import element_17 as e17  # noqa: E402
+from davinci import element_18 as e18  # noqa: E402
+from davinci import element_19 as e19  # noqa: E402
+
+
+def test_e17_document_table8():
+    m17 = e17.load_data()["messages"]
+    s = sec(man139(), al.Measures(wrist_cm=18.6), "Καρπός")
+    assert s.lines == (("Μέτρηση", "18,6 cm"), ("Σκελετός", "Δεν έχει οριστεί"))
+    assert s.messages == (m17["A"], m17["B"], m17["S"])
+    lean = sec(man37(weight_kg=70.0, fat_percent=15.0), al.Measures(wrist_cm=17.0), "Καρπός")  # ΔΜΣ 22,3: χωρίς Β
+    assert lean.messages == (m17["A"], m17["S"])
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(wrist_cm=15.0), "Καρπός")
+    assert minor.lines == (("Μέτρηση", "15,0 cm"),) and minor.messages == (m17["record_only"],)
+    assert sec(man37(), al.Measures(), "Καρπός") is None
+
+
+def test_e18_document_table10():
+    m18 = e18.load_data()["messages"]
+    s = sec(man37(**ATH), al.Measures(thigh_cm=74.5), "Μηρός")
+    d = dict(s.lines)
+    assert d["Ταξινόμηση"] == "Πάνω από το όριο (60 cm · από μία μελέτη, προς επιβεβαίωση)"
+    assert d["Αναμενόμενος μηρός στα 79,3 kg"] == "≥ 60,0 cm (εκτίμηση 58,9, εύρος 57,0 – 60,8)"  # έγγραφο 57,1: βλ. NOTES
+    assert d["Αναμενόμενος μηρός στα 67,8 kg"] == "≥ 60,0 cm (εκτίμηση 53,6, εύρος 51,9 – 55,4)"
+    assert m18["O"] in s.messages and m18["D"] in s.messages and m18["C"] in s.messages and s.indicative
+    today = e18.estimate(138.9, al._user(man37(**ATH)))
+    assert d["Αναμενόμενο στο σημερινό βάρος"] == f"{_n1(today.value_cm)} cm ({_n1(today.range_cm[0])} – {_n1(today.range_cm[1])})"
+    bb = sec(man37(profile="Bodybuilding", resistance_training=True), al.Measures(), "Μηρός")
+    assert dict(bb.lines)["Αναμενόμενος μηρός στα 83,9 kg"].startswith("≥ 60,9 cm (εκτίμηση 60,9")
+
+
+def test_e18_health_profile_and_cases():
+    m18 = e18.load_data()["messages"]
+    h = sec(man37(resistance_training=True), al.Measures(thigh_cm=58.0), "Μηρός")
+    d = dict(h.lines)
+    assert d["Ταξινόμηση"].startswith("Κάτω από το όριο") and m18["X"] in h.messages
+    assert d["Αναμενόμενος μηρός στα 90,0 kg"].startswith("≈ 63,")  # Υγεία: πληροφορία, χωρίς «≥»
+    young = sec(man37(birth_date=date(2000, 1, 1), weight_kg=70.0, fat_percent=15.0), al.Measures(thigh_cm=58.0),
+                "Μηρός")
+    assert m18["threshold_age"] in young.messages and young.indicative
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(thigh_cm=50.0), "Μηρός")
+    assert minor.lines == (("Μέτρηση", "50,0 cm"),) and m18["record_only"] in minor.messages
+    no = sec(man37(), al.Measures(), "Μηρός")
+    assert m18["no_value"] in no.messages and "Αναμενόμενο στο σημερινό βάρος" not in dict(no.lines)
+
+
+def test_e19_document_table9_and_swollen():
+    m19 = e19.load_data()["messages"]
+    s = sec(man37(**ATH), al.Measures(knee_cm=48.0), "Πάνω από το γόνατο")
+    assert s.lines[0] == ("Μέτρηση", "48,0 cm") and s.messages == (m19["A"],)
+    assert s.lines[1][0] == "Αναμενόμενο πάνω από το γόνατο στα 79,3 kg" and s.lines[1][1].startswith("≈ 39,")
+    sw = sec(man37(**ATH), al.Measures(knee_cm=48.0, knee_swollen=True), "Πάνω από το γόνατο")
+    assert sw.lines == (("Μέτρηση", "48,0 cm"),) and sw.messages == (m19["swollen"],)
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Πάνω από το γόνατο") is None
+    est_only = sec(man37(), al.Measures(), "Πάνω από το γόνατο")  # χωρίς μέτρηση, με εκτίμηση
+    assert m19["no_value"] in est_only.messages and est_only.lines[0][0].startswith("Αναμενόμενο πάνω")
+
+
+def test_screen_batch5(monkeypatch):
+    vals = {**WOMAN, "m_wrist": 15.5, "m_thigh18": 58.0, "m_knee": 42.0, "m_knee_swollen": True}
+    f = run_app(monkeypatch, vals)
+    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors and {"Καρπός (Στοιχείο 17)", "Μηρός (Στοιχείο 18)", "Πάνω από το γόνατο (Στοιχείο 19)"} <= set(subs)
+    assert "**Μέτρηση:** 58,0 cm" in md and e19.load_data()["messages"]["swollen"] in f.texts()
+    where = {label: g for g, label in f.inputs}
+    assert all(where[x].startswith("4.") for x in ("Καρπός (cm)", "Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)",
+                                                    "Πάνω από το γόνατο (cm)"))

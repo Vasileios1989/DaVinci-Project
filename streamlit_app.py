@@ -78,14 +78,19 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         biceps = measure_input("Δικέφαλος σφιγμένος (cm)", "m_biceps", "δικέφαλος σφιγμένος")
         fore_rel = measure_input("Πήχης χαλαρός (cm)", "m_fore_rel", "πήχης")
         fore_flx = measure_input("Πήχης σφιγμένος (cm)", "m_fore_flx", "πήχης σφιγμένος")
-        thigh = measure_input("Άνω μηρός (cm)", "m_thigh", "άνω μηρός")
+        wrist = measure_input("Καρπός (cm)", "m_wrist", "καρπός")
+        thigh = measure_input("Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh", "άνω μηρός")
+        thigh18 = measure_input("Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh18", "μηρός")
+        knee = measure_input("Πάνω από το γόνατο (cm)", "m_knee", "γόνατο")
+        swollen = st.checkbox("Το γόνατο είναι πρησμένο ή τραυματισμένο", key="m_knee_swollen")
 
     hydration = hydration_inputs()
     medical = professional_inputs(sex, birth) if level == "Professional" else {}
     m = al.Measures(waist_cm=waist, upper_thigh_cm=thigh, scale_visceral_level=visceral, scale_muscle_percent=muscle,
                     scale_water_percent=water, scale_bone_percent=bone, hip_cm=hip, neck_cm=neck, chest_cm=chest,
                     shoulders_cm=shoulders, arm_relaxed_cm=arm_rel, biceps_flexed_cm=biceps,
-                    forearm_relaxed_cm=fore_rel, forearm_flexed_cm=fore_flx,
+                    forearm_relaxed_cm=fore_rel, forearm_flexed_cm=fore_flx, wrist_cm=wrist, thigh_cm=thigh18,
+                    knee_cm=knee, knee_swollen=swollen,
                     **hydration, **medical)
 
     missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),

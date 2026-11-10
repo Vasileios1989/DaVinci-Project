@@ -291,6 +291,9 @@ class Measures:
     today_morning_weight: float | None = None
     urine_color: int | None = None
     thirst: float | None = None
+    hip_cm: float | None = None
+    neck_cm: float | None = None
+    chest_cm: float | None = None
 
 
 @dataclass(frozen=True)
@@ -512,6 +515,65 @@ def section_analysis(m: Measures, user: e01.UserCategories, weight_kg: float, fa
                    warnings=_dedupe(a.warnings))
 
 
+def _cm(x: float | None) -> list[tuple[str, str]]:
+    return [] if x is None else [("Μέτρηση", f"{_n(x)} cm")]
+
+
+def section_hip(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 11 (Πίνακες 3–6): καμία ταξινόμηση· εκτίμηση στο βάρος-στόχο (Φάση 1, Στοιχείο 03).
+    Η ενότητα εμφανίζεται όταν υπάρχει μέτρηση ή εκτίμηση (σύμβαση εφαρμογής)."""
+    from davinci import element_11 as e11
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e11.assess(user, m.hip_cm, [(p.weight_kg, p.target_fat_percent) for p in pts])
+    if m.hip_cm is None and not r.estimates:
+        return None
+    lines = _cm(m.hip_cm) + [
+        (f"Αναμενόμενο ισχίο στα {_n(e.target_weight_kg)} kg (λίπος {_n(e.target_fat_percent)}%)",
+         f"≈ {_n(e.hip_cm)} cm ({_n(e.range_cm[0])} – {_n(e.range_cm[1])})") for e in r.estimates]
+    if r.out_of_reference_label:
+        lines.append(("Ηλικία", r.out_of_reference_label))
+    return Section("Ισχίο (Στοιχείο 11)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def section_neck(m: Measures, user: e01.UserCategories, fat_percent: float) -> Section | None:
+    """Στοιχείο 12 (Πίνακες 3–5): καμία ταξινόμηση ή στόχος· μόνο ο έλεγχος STOP-Bang."""
+    from davinci import element_12 as e12
+    if m.neck_cm is None:
+        return None
+    rng = None if (e01.is_minor(user.age) or user.pregnant_or_breastfeeding) else e02.profile_range(user)
+    status = None if rng is None else "εντός" if rng[0] <= fat_percent <= rng[1] else "εκτός"
+    r = e12.assess(m.neck_cm, user, fat_status=status)
+    lines = _cm(m.neck_cm)
+    if r.stop_bang_flag is not None:
+        limit = e12.load_data()["stop_bang"][user.sex]
+        lines.append(("Όριο STOP-Bang", f"στο όριο ή πάνω (≥ {limit} cm)" if r.stop_bang_flag
+                      else f"κάτω από το όριο ({limit} cm)"))
+    if r.out_of_reference_label:
+        lines.append(("Ηλικία", r.out_of_reference_label))
+    return Section("Λαιμός (Στοιχείο 12)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def section_chest(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 13 (Πίνακες 3–8): καμία ταξινόμηση· εκτίμηση ANSUR II στο βάρος-στόχο."""
+    from davinci import element_13 as e13
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e13.assess(user, m.chest_cm, [p.weight_kg for p in pts])
+    if m.chest_cm is None and not r.estimates:
+        return None
+    lines = _cm(m.chest_cm) + [
+        (f"Αναμενόμενο στήθος στα {_n(e.weight_kg)} kg", f"≈ {_n(e.value_cm)} cm ({_n(e.range_cm[0])} – {_n(e.range_cm[1])})")
+        for e in r.estimates]
+    return Section("Στήθος (Στοιχείο 13)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def guide_extra(field: str, inp: PlanInput) -> tuple[str, ...]:
+    """Επιπλέον κείμενο στο ⓘ ανά χρήστη (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
+    from davinci import element_13 as e13
+    if field == "στήθος" and inp.sex == "Γυναίκα":
+        return (e13.load_data()["messages"]["women_info"],)
+    return ()
+
+
 def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ...], tuple[str, ...]]:
     """Όλες οι ενότητες της καρτέλας «Μετρήσεις»· επιστρέφει (ενότητες, σφάλματα).
     Ένα μήνυμα που εμφανίστηκε ήδη σε προηγούμενη ενότητα δεν επαναλαμβάνεται."""
@@ -521,7 +583,8 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
         w, f = inp.weight_kg, inp.fat_percent
         muscle = e07.assess(w, f, user, scale_percent=m.scale_muscle_percent).muscle_kg
         bone = _bone(m, user, w, f)
-        out = [section_ffmi(user, w, f), section_waist(m, user, w), section_visceral(m, user, w),
+        out = [section_ffmi(user, w, f), section_waist(m, user, w), section_hip(m, user, w, f),
+               section_neck(m, user, f), section_chest(m, user, w, f), section_visceral(m, user, w),
                section_muscle(m, user, w, f), section_water(m, user, w, f), section_hydration(m, user),
                section_bone(m, user, w, f), section_ratios(m, user, w, f, muscle, bone),
                section_analysis(m, user, w, f, muscle, bone)]

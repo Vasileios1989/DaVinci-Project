@@ -694,3 +694,86 @@ def test_screen_batch2(monkeypatch):
               and "Γραμμή" in a[0][0]]
     assert tables and tables[0][0] == {"Γραμμή": "Άλιπη μάζα", "kg": "79,4", "% άλιπης": "100,0%", "% βάρους": "57,1%"}
     assert any(a[0].startswith("Διαφορά 4,7 kg") for n, a, k in f.shown if n == "warning")
+
+
+# ================================================================ Δόση 3: 11, 12, 13
+from davinci import element_11 as e11  # noqa: E402
+from davinci import element_12 as e12  # noqa: E402
+from davinci import element_13 as e13  # noqa: E402
+
+ATH = dict(profile="Αθλητικό", resistance_training=True)  # Πίνακας 7 του 03: 79,3 / 67,8 kg
+
+
+def test_e11_document_table8():
+    s = sec(man37(**ATH), al.Measures(hip_cm=142.7), "Ισχίο")
+    m11 = e11.load_data()["messages"]
+    assert s.lines == (("Μέτρηση", "142,7 cm"),
+                       ("Αναμενόμενο ισχίο στα 79,3 kg (λίπος 13,0%)", "≈ 98,9 cm (96,0 – 101,9)"),
+                       ("Αναμενόμενο ισχίο στα 67,8 kg (λίπος 6,0%)", "≈ 92,0 cm (89,3 – 94,8)"))
+    b = m11["B"].replace("Χ cm", "98,9 cm").replace("Υ–Ζ", "96,0–101,9")
+    assert s.messages == (m11["A"], b) and not s.indicative  # 99,0 στο έγγραφο: βλ. NOTES (στρογγυλεμένο βάρος)
+
+
+def test_e11_cases():
+    m11 = e11.load_data()["messages"]
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Ισχίο") is None  # ούτε μέτρηση ούτε εκτίμηση
+    est_only = sec(man37(), al.Measures(), "Ισχίο")
+    assert m11["no_hip"] in est_only.messages and est_only.lines[0][0].startswith("Αναμενόμενο ισχίο")
+    bb = sec(man37(profile="Bodybuilding", ancestry="4"), al.Measures(hip_cm=120.0), "Ισχίο")
+    assert m11["C"] in bb.messages and m11["ancestry"] in bb.messages and bb.indicative
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(hip_cm=90.0), "Ισχίο")
+    assert minor.lines == (("Μέτρηση", "90,0 cm"),) and m11["record_only"] in minor.messages
+    old = sec(man37(birth_date=date(1940, 1, 1)), al.Measures(hip_cm=110.0), "Ισχίο")
+    assert ("Ηλικία", "Εκτός δεδομένων αναφοράς") in old.lines
+
+
+def test_e12_document_table6_and_cases():
+    m12 = e12.load_data()["messages"]
+    s = sec(man139(profile="Αθλητικό"), al.Measures(neck_cm=44.0), "Λαιμός")
+    assert s.lines == (("Μέτρηση", "44,0 cm"), ("Όριο STOP-Bang", "στο όριο ή πάνω (≥ 43 cm)"))
+    assert s.messages == (m12["A"], m12["B"]) and not s.indicative  # χωρίς Γ: λίπος εκτός εύρους
+    lean = sec(man37(weight_kg=80.0, fat_percent=10.0, profile="Αθλητικό"), al.Measures(neck_cm=40.0), "Λαιμός")
+    assert ("Όριο STOP-Bang", "κάτω από το όριο (43 cm)") in lean.lines and m12["C"] in lean.messages
+    w = sec(man37(sex="Γυναίκα", weight_kg=70.0, fat_percent=30.0, ancestry="3b"), al.Measures(neck_cm=41.0),
+            "Λαιμός")
+    assert ("Όριο STOP-Bang", "στο όριο ή πάνω (≥ 41 cm)") in w.lines and m12["ancestry_3b"] in w.messages
+    assert w.indicative
+    preg = sec(man37(sex="Γυναίκα", pregnant=True, weight_kg=70.0, fat_percent=30.0), al.Measures(neck_cm=45.0),
+               "Λαιμός")
+    assert preg.lines == (("Μέτρηση", "45,0 cm"),) and m12["record_only"] in preg.messages
+    assert sec(man37(), al.Measures(), "Λαιμός") is None
+    old = sec(man37(birth_date=date(1940, 1, 1)), al.Measures(neck_cm=40.0), "Λαιμός")
+    assert ("Ηλικία", "Εκτός δεδομένων αναφοράς") in old.lines
+
+
+def test_e13_document_table9():
+    m13 = e13.load_data()["messages"]
+    s = sec(man37(**ATH), al.Measures(chest_cm=131.5), "Στήθος")
+    assert s.lines == (("Μέτρηση", "131,5 cm"), ("Αναμενόμενο στήθος στα 79,3 kg", "≈ 102,9 cm (100,1 – 105,8)"),
+                       ("Αναμενόμενο στήθος στα 67,8 kg", "≈ 95,2 cm (92,6 – 97,9)"))
+    assert s.messages == (m13["A"], m13["B"]) and not s.indicative
+
+
+def test_e13_cases_and_women_info():
+    m13 = e13.load_data()["messages"]
+    old = sec(man37(birth_date=date(1960, 1, 1), ancestry="5"), al.Measures(chest_cm=120.0), "Στήθος")
+    assert m13["age_59"] in old.messages and m13["ancestry_4_5"] in old.messages and old.indicative
+    no = sec(man37(), al.Measures(), "Στήθος")
+    assert m13["no_chest"] in no.messages and no.messages[0] == m13["A"]
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Στήθος") is None
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(chest_cm=80.0), "Στήθος")
+    assert minor.lines == (("Μέτρηση", "80,0 cm"),) and m13["record_only"] in minor.messages
+    assert al.guide_extra("στήθος", man37(sex="Γυναίκα")) == (m13["women_info"],)
+    assert al.guide_extra("στήθος", man37()) == () and al.guide_extra("μέση", man37(sex="Γυναίκα")) == ()
+
+
+def test_screen_batch3(monkeypatch):
+    vals = {"birth": date(1989, 1, 1), "sex": "Γυναίκα", "height": 165.0, "weight": 72.0, "fat": 38.0,
+            "ancestry": "1", "pal": "1.4", "m_hip": 110.0, "m_neck": 36.0, "m_chest": 100.0}
+    f = run_app(monkeypatch, vals)
+    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors and {"Ισχίο (Στοιχείο 11)", "Λαιμός (Στοιχείο 12)", "Στήθος (Στοιχείο 13)"} <= set(subs)
+    assert "**Όριο STOP-Bang:** κάτω από το όριο (41 cm)" in md
+    infos = [a[0] for n, a, k in f.shown if n == "info"]
+    assert e13.load_data()["messages"]["women_info"] in infos  # μέσα στο ⓘ του στήθους

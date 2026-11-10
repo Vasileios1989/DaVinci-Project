@@ -198,18 +198,21 @@ def tab_card(inp: al.PlanInput) -> None:
 
 
 # ------------------------------------------------------------------ μετρήσεις (Στοιχεία 05–39, σε δόσεις)
-def guide_box(field: str) -> None:
+def guide_box(field: str, extra: tuple[str, ...] = ()) -> None:
     g = measurement.guide(field)
     if g is None:
         return
     with st.expander(f"ⓘ {g.title}"):
         for i, step in enumerate(g.steps, start=1):
             st.markdown(f"{i}. {step}")
+        for x in extra:
+            st.info(x)
 
 
-def measure_input(label: str, key: str, field: str, *, min_value: float = 0.1, max_value: float | None = None):
+def measure_input(label: str, key: str, field: str, *, min_value: float = 0.1, max_value: float | None = None,
+                  extra: tuple[str, ...] = ()):
     v = st.number_input(label, min_value=min_value, max_value=max_value, value=None, step=0.1, format="%.1f", key=key)
-    guide_box(field)
+    guide_box(field, extra)
     return v
 
 
@@ -249,6 +252,9 @@ def tab_measures(inp: al.PlanInput) -> None:
                "Σε κάθε πεδίο, το ⓘ δείχνει πώς μετράς.")
     m = al.Measures(
         waist_cm=measure_input("Περιφέρεια μέσης (cm)", "m_waist", "μέση"),
+        hip_cm=measure_input("Περιφέρεια ισχίου (cm)", "m_hip", "ισχίο"),
+        neck_cm=measure_input("Περιφέρεια λαιμού (cm)", "m_neck", "λαιμός"),
+        chest_cm=measure_input("Περιφέρεια στήθους (cm)", "m_chest", "στήθος", extra=al.guide_extra("στήθος", inp)),
         upper_thigh_cm=measure_input("Περιφέρεια άνω μηρού (cm)", "m_thigh", "άνω μηρός"),
         scale_visceral_level=measure_input("Σπλαχνικό λίπος — τιμή ζυγαριάς (χωρίς μονάδα)", "m_visceral",
                                            "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0),

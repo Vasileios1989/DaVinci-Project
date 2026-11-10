@@ -143,6 +143,9 @@ def correct(intake_kcal: float, target_kg_week: float, e_kcal_per_kg: float, win
         return Correction(a, target_kg_week, se, False, intake_kcal, plateau=plateau, messages=tuple(msgs))
 
     delta = (target_kg_week - a) * e_kcal_per_kg / 7
+    if delta < 0 and (user.pregnant or e01.is_minor(user.age)):
+        # Κανόνας 16: καμία διόρθωση προς έλλειμμα (μείωση πρόσληψης)· το έγγραφο δεν δίνει κείμενο
+        return Correction(a, target_kg_week, se, False, intake_kcal, plateau=plateau, messages=tuple(msgs))
     step = Decimal(d["round_kcal"])
     new = float((Decimal(repr(intake_kcal + delta)) / step).quantize(Decimal(1), rounding=ROUND_HALF_UP) * step)
     if abs(delta) > d["confirm_above_kcal"] and not confirmed_big:

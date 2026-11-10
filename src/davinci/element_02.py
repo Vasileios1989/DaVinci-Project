@@ -136,8 +136,11 @@ def assess(fat_percent: float, user: e01.UserCategories, weight_kg: float | None
                              indicative=True, messages=(d["messages"]["K0_age_5"],))
         cat, normal = classify_child_value(value, user.sex, age)
         msgs = [] if user.ancestry == "1" else [d["messages"]["K0_children_groups_2_5"]]
+        lo, _hi, high_from, very_from = d["children_tables"][user.sex][str(age)]
+        # Κανόνας 11: το έγγραφο δεν τον περιορίζει σε ενήλικες· όρια ταξινόμησης των Πινάκων 6α/6β
+        near = any(abs(value - b) <= d["near_boundary_units"] for b in (lo, high_from, very_from))
         return FatResult(value, fat_kg, cat, cat, cat == "Φυσιολογικό", "children", None, None,
-                         indicative=bool(msgs), messages=tuple(msgs))
+                         near_boundary=near, indicative=bool(msgs), messages=tuple(msgs))
 
     row = adult_row(user)
     _, msgs = adult_table_for(user)

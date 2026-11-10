@@ -108,7 +108,9 @@ def assess(weight_kg: float, fat_percent: float, user: e01.UserCategories, *,
                 indicative = True
 
     dry = dry_range = None
-    if not minor:  # Συμπλήρωμα Α
+    if user.pregnant_or_breastfeeding and not minor:
+        pass  # Συμπλήρωμα Α «Ανήλικοι / εγκυμοσύνη: καμία τιμή / μόνο καταγραφή»· 03 Γ-7· θηλασμός όπως 01. Χωρίς κείμενο στο έγγραφο.
+    elif not minor:  # Συμπλήρωμα Α
         f = d["dry_muscle"]
         dry = f["factor"] * kg
         dry_range = (f["range"][0] * kg, f["range"][1] * kg)

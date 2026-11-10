@@ -127,8 +127,8 @@ def assess(user: e01.UserCategories, weight_kg: float, pal: float, *, goal: str 
     indicative = ffm_indicative or key in d["pal_athlete_only"]
     pregnant = trimester is not None
     w_bmr = pre_pregnancy_weight_kg if (pregnant and pre_pregnancy_weight_kg) else weight_kg
-    if pregnant and not pre_pregnancy_weight_kg:
-        indicative = True
+    if (pregnant and not pre_pregnancy_weight_kg) or (user.pregnant and not pregnant):
+        indicative = True  # χωρίς βάρος πριν ή χωρίς τρίμηνο (δεν μπαίνει η προσθήκη του Πίνακα 6)
     b = bmr(user, w_bmr, athlete=athlete, fat_free_mass_kg=fat_free_mass_kg)
     tdee = b.kcal * pal
     extra = 0
@@ -162,7 +162,7 @@ def assess(user: e01.UserCategories, weight_kg: float, pal: float, *, goal: str 
         msgs.append(m["watch"])
 
     base = dict(bmr=b, pal=pal, tdee=tdee, tdee_range=rng, bmr_share=1 / pal, goal=goal)
-    if pregnant and goal == "loss":
+    if (pregnant or user.pregnant) and goal == "loss":
         goal = "maintain"  # καμία πρόταση ελλείμματος στην εγκυμοσύνη (σύμβαση συστήματος)
         base["goal"] = goal
     if goal == "maintain":

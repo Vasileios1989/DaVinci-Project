@@ -118,6 +118,9 @@ def partition(direction_: str, fat_kg: float, user: e01.UserCategories, *, train
             msgs.append(m["maintain_trained"])
         return Partition("maintain", None, None, 0.0, 0.0, 0.0, 0.0, messages=tuple(msgs))
 
+    if direction_ == "loss" and user.breastfeeding and lactation_weeks_postpartum is None:
+        # Κανόνας 12: απώλεια «μόνο αν έχουν περάσει τουλάχιστον 4 εβδομάδες»· χωρίς τη δήλωση δεν επιτρέπεται
+        return Partition("loss", None, None, allowed=False, messages=(m["lactation_no"],))
     if direction_ == "loss" and lactation_weeks_postpartum is not None:
         lc = d["lactation"]
         if lactation_weeks_postpartum < lc["min_weeks_postpartum"] or bmi < lc["min_bmi"]:

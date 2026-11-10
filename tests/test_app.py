@@ -2,6 +2,7 @@
 ψεύτικο streamlit, ώστε να ελέγχεται ότι τρέχει όλη η ροή χωρίς σφάλματα.
 Η οθόνη ΔΕΝ ελέγχεται εδώ με το πραγματικό Streamlit (δεν ήταν εγκατεστημένο στο περιβάλλον ανάπτυξης)."""
 
+import importlib
 import runpy
 import sys
 import types
@@ -625,8 +626,9 @@ def test_e08_hydration():
     assert old.lines == () and old.messages == (m8["age_60_no_blood"],)
     minor_inp = man37(birth_date=date(2012, 1, 1))
     assert e08.assess_hydration(al._user(minor_inp)).messages == (m8["minor"],)
-    assert m8["minor"] in sec(minor_inp, al.Measures(), "Υγρά").messages  # ίδιο μήνυμα: εμφανίζεται μία φορά
-    assert sec(minor_inp, al.Measures(), "Ενυδάτωση").messages == ()
+    assert m8["minor"] in sec(minor_inp, al.Measures(), "Υγρά").messages
+    # Δόση 8: μια ενότητα που θα έμενε χωρίς μήνυμα κρατά το πρώτο της, ακόμη κι αν εμφανίστηκε πιο πάνω
+    assert sec(minor_inp, al.Measures(), "Ενυδάτωση").messages == (m8["minor"],)
 
 
 def test_e09_document_table11_and_typical():
@@ -1312,3 +1314,105 @@ def test_ratios_shown_without_measurements_when_targets_exist():
     assert m24["missing"] in one.messages and "Εκατοστημόριο ANSUR II" not in dict(one.lines)
     lean = sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(shoulders_cm=120.0), "Λόγος ώμων / μέσης")
     assert lean.lines == () and lean.messages[0] == m24["missing"]  # χωρίς στόχο, μόνο ένα πεδίο
+
+
+# ---- Δόση 8: Στοιχεία 26–29 (λόγοι άκρων) ----
+from davinci import element_26 as e26  # noqa: E402
+from davinci import element_27 as e27  # noqa: E402
+from davinci import element_28 as e28  # noqa: E402
+from davinci import element_29 as e29  # noqa: E402
+
+LIMBS = dict(thigh_cm=60.0, calf_cm=40.0, wrist_cm=18.0, biceps_flexed_cm=38.0, ankle_cm=23.0, knee_cm=40.0)
+
+
+def test_e26_to_e29_document_examples():
+    m = al.Measures(**LIMBS)
+    exp = {  # Πίνακες 9 (26), 11 (27), 11 (28), 11 (29): Αθλητικό 13% και 6%
+        "Λόγος μηρού / γάμπας": ("1,50", "5ο–25ο", "≈ 1,56 (μηρός 58,9 cm · γάμπα 37,7 cm)",
+                                 "≈ 1,52 (μηρός 53,6 cm · γάμπα 35,2 cm)"),
+        "Λόγος καρπού / δικεφάλου": ("0,47", "25ο–50ό", "≈ 0,51 (καρπός 17,4 cm · δικέφαλος 34,1 cm)",
+                                     "≈ 0,54 (καρπός 16,9 cm · δικέφαλος 31,3 cm)"),
+        "Λόγος αστραγάλου / γάμπας": ("0,58", "25ο–50ό", "≈ 0,59 (αστράγαλος 22,2 cm · γάμπα 37,7 cm)",
+                                      "≈ 0,60 (αστράγαλος 21,1 cm · γάμπα 35,2 cm)"),
+        # έγγραφο 39,3 / 36,5: διαφορά 0,1 από το ακριβές βάρος-στόχο, όπως στο 19 (βλ. NOTES)· ο λόγος ίδιος
+        "Λόγος μηρού / γονάτου": ("1,50", "25ο–50ό", "≈ 1,50 (μηρός 58,9 cm · πάνω από το γόνατο 39,2 cm)",
+                                  "≈ 1,47 (μηρός 53,6 cm · πάνω από το γόνατο 36,4 cm)"),
+    }
+    for title, (ratio, band, r1, r2) in exp.items():
+        s = sec(man37(**ATH), m, title)
+        assert s.lines[0][1] == ratio and dict(s.lines)["Εκατοστημόριο ANSUR II"] == band, title
+        assert s.lines[2] == ("Αναμενόμενος λόγος στα 79,3 kg", r1) and s.lines[3][1] == r2, title
+    m26, m27, m28 = e26.load_data()["messages"], e27.load_data()["messages"], e28.load_data()["messages"]
+    s26 = sec(man37(**ATH), m, "Λόγος μηρού / γάμπας")
+    assert m26["P"] in s26.messages and m26["T"] not in s26.messages
+    s27 = sec(man37(**ATH), m, "Λόγος καρπού / δικεφάλου")
+    assert m27["S"] in s27.messages and m27["P"] in s27.messages and m27["T"] not in s27.messages
+    s28 = sec(man37(**ATH), m, "Λόγος αστραγάλου / γάμπας")
+    assert m28["S"] in s28.messages and m28["N"] in s28.messages and m28["T"] not in s28.messages
+    s29 = sec(man37(**ATH), m, "Λόγος μηρού / γονάτου")
+    assert e29.load_data()["messages"]["T"] not in s29.messages and e29.load_data()["messages"]["S"] in s29.messages
+    for k in (26, 27, 28, 29):
+        assert al.field_note(k) == importlib.import_module(f"davinci.element_{k}").load_data()["messages"]["T"]
+
+
+def test_e26_e28_leg_exclusions():
+    m26, m28 = e26.load_data()["messages"], e28.load_data()["messages"]
+    ed = al.Measures(**LIMBS, leg_edema=True)
+    assert sec(man37(), ed, "Λόγος μηρού / γάμπας").lines == () and \
+        sec(man37(), ed, "Λόγος μηρού / γάμπας").messages == (m26["edema"],)
+    assert sec(man37(), ed, "Λόγος αστραγάλου / γάμπας").messages == (m28["edema"],)
+    for flag in ("leg_injured", "ankle_injured"):
+        inj = al.Measures(**LIMBS, **{flag: True})
+        s26 = sec(man37(), inj, "Λόγος μηρού / γάμπας")
+        assert s26.lines == (("Λόγος μηρού / γάμπας", "1,50"),) and s26.messages == (m26["injury"],), flag
+        assert sec(man37(), inj, "Λόγος αστραγάλου / γάμπας").lines == (), flag  # 28: δεν υπολογίζεται
+    lip = sec(man37(sex="Γυναίκα", height_cm=165.0, weight_kg=90.0, fat_percent=40.0),
+              al.Measures(**LIMBS, lipedema=True), "Λόγος αστραγάλου / γάμπας")
+    assert lip.lines == (("Λόγος αστραγάλου / γάμπας", "0,58"),) and lip.messages == (m28["lipedema"],)
+    both = sec(man37(), al.Measures(**LIMBS, lipedema=True, leg_edema=True), "Λόγος αστραγάλου / γάμπας")
+    assert both.messages == (m28["edema"],)  # προηγείται το οίδημα (σύμβαση του 28)
+    high = sec(man37(), al.Measures(ankle_cm=30.0, calf_cm=40.0), "Λόγος αστραγάλου / γάμπας")
+    assert m28["U"] in high.messages  # 0,75 > 0,68
+
+
+def test_e27_e29_exclusions_and_missing():
+    m27, m29 = e27.load_data()["messages"], e29.load_data()["messages"]
+    inj = sec(man37(), al.Measures(**LIMBS, arm_injured=True), "Λόγος καρπού / δικεφάλου")
+    assert inj.lines == (("Λόγος καρπού / δικεφάλου (σφιγμένος)", "0,47"),) and inj.messages == (m27["injury"],)
+    knee = sec(man37(), al.Measures(**LIMBS, knee_swollen=True), "Λόγος μηρού / γονάτου")
+    assert knee.lines == () and knee.messages == (m29["knee"],)
+    lip = sec(man37(sex="Γυναίκα", height_cm=165.0, weight_kg=90.0, fat_percent=40.0),
+              al.Measures(**LIMBS, lipedema=True), "Λόγος μηρού / γονάτου")
+    assert lip.messages == (m29["lipedema"],) and lip.lines == (("Λόγος μηρού / γονάτου", "1,50"),)
+    relaxed = sec(man37(), al.Measures(wrist_cm=18.0, arm_relaxed_cm=40.0), "Λόγος καρπού / δικεφάλου")
+    assert m27["missing"] in relaxed.messages and "Εκατοστημόριο ANSUR II" not in dict(relaxed.lines)
+    lean = al.Measures(knee_cm=40.0)
+    one = sec(man37(weight_kg=80.0, fat_percent=15.0), lean, "Λόγος μηρού / γονάτου")
+    assert one.lines == () and one.messages[0] == m29["missing"]
+    for title in ("Λόγος μηρού / γάμπας", "Λόγος καρπού / δικεφάλου", "Λόγος αστραγάλου / γάμπας",
+                  "Λόγος μηρού / γονάτου"):
+        assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), title) is None, title
+        assert sec(man37(), al.Measures(), title).lines[0][0].startswith("Αναμενόμενος λόγος"), title
+
+
+def test_e26_e28_e29_single_field_shows_missing():
+    lean = dict(weight_kg=80.0, fat_percent=15.0)
+    for title, field, msgs in (("Λόγος μηρού / γάμπας", "calf_cm", e26), ("Λόγος αστραγάλου / γάμπας", "ankle_cm", e28),
+                               ("Λόγος μηρού / γονάτου", "thigh_cm", e29), ("Λόγος καρπού / δικεφάλου", "wrist_cm", e27)):
+        s = sec(man37(**lean), al.Measures(**{field: 30.0}), title)
+        assert s.messages[0] == msgs.load_data()["messages"]["missing"], title
+
+
+def test_screen_batch8(monkeypatch):
+    vals = {**WOMAN, "m_thigh18": 60.0, "m_calf": 38.0, "m_wrist": 15.5, "m_biceps": 30.0, "m_ankle": 22.0,
+            "m_knee": 40.0}
+    f = run_app(monkeypatch, vals)
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors and {"Λόγος μηρού / γάμπας (Στοιχείο 26)", "Λόγος καρπού / δικεφάλου (Στοιχείο 27)",
+                             "Λόγος αστραγάλου / γάμπας (Στοιχείο 28)", "Λόγος μηρού / γονάτου (Στοιχείο 29)"} <= set(subs)
+    for k in (26, 27, 28, 29):
+        assert al.field_note(k) in f.texts(), k
+    f2 = run_app(monkeypatch, {**vals, "m_lipedema": True, "m_leg_injured": True})
+    assert e29.load_data()["messages"]["lipedema"] in f2.texts() and e26.load_data()["messages"]["injury"] in f2.texts()
+    man = run_app(monkeypatch, {**vals, "sex": "Άνδρας", "m_lipedema": True})  # το πεδίο μόνο στις γυναίκες
+    assert e29.load_data()["messages"]["lipedema"] not in man.texts()

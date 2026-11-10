@@ -319,7 +319,9 @@ class Measures:
     ankle_cm: float | None = None
     leg_edema: bool = False  # πρήξιμο (οίδημα) στα πόδια ή στον αστράγαλο (Στοιχεία 20, 21)
     ankle_injured: bool = False
-    arm_injured: bool = False  # τραυματισμός ή πρήξιμο στο δεξί χέρι (Στοιχείο 25)
+    arm_injured: bool = False  # τραυματισμός ή πρήξιμο στο δεξί χέρι ή στον καρπό (Στοιχεία 25, 27)
+    leg_injured: bool = False  # τραυματισμός στο δεξί πόδι, μηρός ή γάμπα (Στοιχεία 26, 28)
+    lipedema: bool = False  # δηλωμένη διάγνωση λιποιδήματος (Στοιχεία 28, 29)
 
 
 @dataclass(frozen=True)
@@ -866,9 +868,67 @@ def section_forearm_biceps(m: Measures, user: e01.UserCategories, weight_kg: flo
         return None
     return _percentile_section(
         "Λόγος πήχη / δικεφάλου (Στοιχείο 25)", "Λόγος πήχη / δικεφάλου (σφιγμένοι)", r, e25.load_data(), user,
-        lambda x: (f"Αναμενόμενος λόγος στα {_n(x.weight_kg)} kg",
-                   f"≈ {_n(x.ratio, 2)} (πήχης {_n(x.numerator_cm)} cm · δικέφαλος {_n(x.denominator_cm)} cm)"),
-        field_note=arm_field_note())
+        _expected_ratio_rows("πήχης", "δικέφαλος"), field_note=arm_field_note())
+
+
+def field_note(element: int) -> str:
+    """Μήνυμα Τ των Στοιχείων 25–29: «Πάντα, δίπλα στα πεδία καταχώρησης»."""
+    import importlib
+    return importlib.import_module(f"davinci.element_{element}").load_data()["messages"]["T"]
+
+
+def _expected_ratio_rows(name_num: str, name_den: str):
+    return lambda x: (f"Αναμενόμενος λόγος στα {_n(x.weight_kg)} kg",
+                      f"≈ {_n(x.ratio, 2)} ({name_num} {_n(x.numerator_cm)} cm · {name_den} {_n(x.denominator_cm)} cm)")
+
+
+def section_thigh_calf(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 26 (Πίνακες 3, 5, 6, 8). Τραυματισμός: δηλωμένος στο πόδι ή στον αστράγαλο (σύμβαση εφαρμογής)."""
+    from davinci import element_26 as e26
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e26.assess(m.thigh_cm, m.calf_cm, user, [p.weight_kg for p in pts], edema=m.leg_edema,
+                   injured=m.leg_injured or m.ankle_injured)
+    if m.thigh_cm is None and m.calf_cm is None and not r.rows:
+        return None
+    return _percentile_section("Λόγος μηρού / γάμπας (Στοιχείο 26)", "Λόγος μηρού / γάμπας", r, e26.load_data(),
+                               user, _expected_ratio_rows("μηρός", "γάμπα"), field_note(26))
+
+
+def section_wrist_biceps(m: Measures, user: e01.UserCategories, weight_kg: float,
+                         fat_percent: float) -> Section | None:
+    """Στοιχείο 27 (Πίνακες 4, 7, 8, 10): καρπός / σφιγμένος δικέφαλος."""
+    from davinci import element_27 as e27
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e27.assess(m.wrist_cm, m.biceps_flexed_cm, user, [p.weight_kg for p in pts],
+                   injured_or_swollen=m.arm_injured)
+    if m.wrist_cm is None and m.biceps_flexed_cm is None and not r.rows:
+        return None
+    return _percentile_section("Λόγος καρπού / δικεφάλου (Στοιχείο 27)", "Λόγος καρπού / δικεφάλου (σφιγμένος)", r,
+                               e27.load_data(), user, _expected_ratio_rows("καρπός", "δικέφαλος"), field_note(27))
+
+
+def section_ankle_calf(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 28 (Πίνακες 4, 7, 8, 10): οίδημα ή τραυματισμός στο πόδι → δεν υπολογίζεται· λιποίδημα → καταγραφή."""
+    from davinci import element_28 as e28
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e28.assess(m.ankle_cm, m.calf_cm, user, [p.weight_kg for p in pts], lipedema=m.lipedema,
+                   edema_or_injury=m.leg_edema or m.ankle_injured or m.leg_injured)
+    if m.ankle_cm is None and m.calf_cm is None and not r.rows:
+        return None
+    return _percentile_section("Λόγος αστραγάλου / γάμπας (Στοιχείο 28)", "Λόγος αστραγάλου / γάμπας", r,
+                               e28.load_data(), user, _expected_ratio_rows("αστράγαλος", "γάμπα"), field_note(28))
+
+
+def section_thigh_knee(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 29 (Πίνακες 4, 7, 8, 10): γόνατο πρησμένο ή τραυματισμένο → δεν υπολογίζεται· λιποίδημα → καταγραφή."""
+    from davinci import element_29 as e29
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e29.assess(m.thigh_cm, m.knee_cm, user, [p.weight_kg for p in pts], lipedema=m.lipedema,
+                   knee_swollen_or_injured=m.knee_swollen)
+    if m.thigh_cm is None and m.knee_cm is None and not r.rows:
+        return None
+    return _percentile_section("Λόγος μηρού / γονάτου (Στοιχείο 29)", "Λόγος μηρού / γονάτου", r, e29.load_data(),
+                               user, _expected_ratio_rows("μηρός", "πάνω από το γόνατο"), field_note(29))
 
 
 def guide_extra(field: str, sex: str) -> tuple[str, ...]:
@@ -881,7 +941,9 @@ def guide_extra(field: str, sex: str) -> tuple[str, ...]:
 
 def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ...], tuple[str, ...]]:
     """Όλες οι ενότητες της καρτέλας «Μετρήσεις»· επιστρέφει (ενότητες, σφάλματα).
-    Ένα μήνυμα που εμφανίστηκε ήδη σε προηγούμενη ενότητα δεν επαναλαμβάνεται."""
+    Ένα μήνυμα που εμφανίστηκε ήδη σε προηγούμενη ενότητα δεν επαναλαμβάνεται, εκτός αν η ενότητα θα έμενε
+    χωρίς κανένα μήνυμα: τότε κρατά το πρώτο της (π.χ. το ίδιο μήνυμα οιδήματος στα Στοιχεία 26 και 28),
+    ώστε να φαίνεται γιατί ο λόγος δεν υπολογίστηκε (σύμβαση εφαρμογής)."""
     from davinci import element_07 as e07
     try:
         user = _user(inp)
@@ -894,6 +956,8 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
                section_thigh(m, user, w, f), section_knee(m, user, w, f), section_calf(m, user, w, f),
                section_ankle(m, user, w, f), section_whr(m, user, w, f), section_chest_waist(m, user, w, f),
                section_shoulders_waist(m, user, w, f), section_forearm_biceps(m, user, w, f),
+               section_thigh_calf(m, user, w, f), section_wrist_biceps(m, user, w, f),
+               section_ankle_calf(m, user, w, f), section_thigh_knee(m, user, w, f),
                section_visceral(m, user, w),
                section_muscle(m, user, w, f), section_water(m, user, w, f), section_hydration(m, user),
                section_bone(m, user, w, f), section_ratios(m, user, w, f, muscle, bone),
@@ -905,7 +969,7 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
     for sec in out:
         if sec is None:
             continue
-        fresh = tuple(x for x in sec.messages if x not in seen)
+        fresh = tuple(x for x in sec.messages if x not in seen) or sec.messages[:1]
         seen.update(fresh)
         result.append(Section(sec.title, sec.lines, fresh, sec.indicative, sec.table, sec.warnings))
     return tuple(result), ()

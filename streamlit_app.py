@@ -79,17 +79,24 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         fore_rel = measure_input("Πήχης χαλαρός (cm)", "m_fore_rel", "πήχης")
         fore_flx = measure_input("Πήχης σφιγμένος (cm)", "m_fore_flx", "πήχης σφιγμένος")
         st.caption(al.arm_field_note())
-        arm_injured = st.checkbox("Τραυματισμός ή πρήξιμο στο δεξί χέρι", key="m_arm_injured")
         wrist = measure_input("Καρπός (cm)", "m_wrist", "καρπός")
+        st.caption(al.field_note(27))
+        arm_injured = st.checkbox("Τραυματισμός ή πρήξιμο στο δεξί χέρι ή στον καρπό", key="m_arm_injured")
         thigh = measure_input("Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh", "άνω μηρός")
         thigh18 = measure_input("Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh18", "μηρός")
         knee = measure_input("Πάνω από το γόνατο (cm)", "m_knee", "γόνατο")
+        st.caption(al.field_note(29))
         swollen = st.checkbox("Το γόνατο είναι πρησμένο ή τραυματισμένο", key="m_knee_swollen")
         calf = measure_input("Γάμπα (cm)", "m_calf", "γάμπα")
+        st.caption(al.field_note(26))
         ankle = measure_input("Αστράγαλος (cm)", "m_ankle", "αστράγαλος")
         st.caption(al.ankle_field_note())
+        st.caption(al.field_note(28))
         edema = st.checkbox("Πρήξιμο (οίδημα) στα πόδια ή στον αστράγαλο", key="m_edema")
         injured = st.checkbox("Ο αστράγαλος είναι τραυματισμένος (π.χ. διάστρεμμα)", key="m_ankle_injured")
+        leg_injured = st.checkbox("Τραυματισμός στο δεξί πόδι (μηρός ή γάμπα)", key="m_leg_injured")
+        lipedema = (st.checkbox("Έχω διάγνωση λιποιδήματος από γιατρό", key="m_lipedema")
+                    if sex == "Γυναίκα" else False)
 
     hydration = hydration_inputs()
     medical = professional_inputs(sex, birth) if level == "Professional" else {}
@@ -98,7 +105,7 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
                     shoulders_cm=shoulders, arm_relaxed_cm=arm_rel, biceps_flexed_cm=biceps,
                     forearm_relaxed_cm=fore_rel, forearm_flexed_cm=fore_flx, wrist_cm=wrist, thigh_cm=thigh18,
                     knee_cm=knee, knee_swollen=swollen, calf_cm=calf, ankle_cm=ankle, leg_edema=edema,
-                    ankle_injured=injured, arm_injured=arm_injured,
+                    ankle_injured=injured, arm_injured=arm_injured, leg_injured=leg_injured, lipedema=lipedema,
                     **hydration, **medical)
 
     missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),

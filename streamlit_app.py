@@ -11,7 +11,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from davinci import app_logic as al  # noqa: E402
@@ -21,6 +20,39 @@ from davinci import measurement  # noqa: E402
 from davinci.fmt import num  # noqa: E402
 
 st.set_page_config(page_title="DaVinci Fitness", page_icon="💪", layout="centered")
+
+# Εμφάνιση (σύμβαση συστήματος): σκούρο θέμα με κάρτες· τα χρώματα ορίζονται στο .streamlit/config.toml.
+# Το CSS αλλάζει μόνο την όψη (καρτέλες, κάρτες, κουμπιά)· δεν αγγίζει υπολογισμούς ή κείμενα.
+STYLE = """
+<style>
+.block-container {padding-top: 2.2rem; max-width: 46rem;}
+/* πάνω καρτέλες: Μέτρηση · Αποτελέσματα · Πλάνο */
+.stTabs [data-baseweb="tab-list"] {gap: 1.4rem; border-bottom: 1px solid rgba(255,255,255,.08);}
+.stTabs [data-baseweb="tab"] {height: 3rem; padding: 0 .1rem; background: transparent;}
+.stTabs [data-baseweb="tab"] p {font-size: 1.05rem; font-weight: 600; opacity: .6;}
+.stTabs [data-baseweb="tab"][aria-selected="true"] p {opacity: 1;}
+.stTabs [data-baseweb="tab-highlight"] {height: 3px; border-radius: 3px;}
+/* δεύτερη σειρά: περιοχές μέτρησης, σε σχήμα χαπιού */
+.stTabs .stTabs [data-baseweb="tab-list"] {gap: .5rem; border-bottom: 0; padding: .35rem 0 .6rem;}
+.stTabs .stTabs [data-baseweb="tab"] {height: 2.3rem; padding: 0 1rem; border-radius: 999px;
+    background: #262B42; border: 1px solid rgba(255,255,255,.08);}
+.stTabs .stTabs [data-baseweb="tab"] p {font-size: .92rem; font-weight: 500; opacity: .85;}
+.stTabs .stTabs [data-baseweb="tab"][aria-selected="true"] {background: #FF7043; border-color: #FF7043;}
+.stTabs .stTabs [data-baseweb="tab"][aria-selected="true"] p {color: #14172B; opacity: 1; font-weight: 700;}
+.stTabs .stTabs [data-baseweb="tab-highlight"], .stTabs .stTabs [data-baseweb="tab-border"] {display: none;}
+/* κάρτες */
+[data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"] details {
+    border-radius: 16px; border-color: rgba(255,255,255,.08);}
+[data-testid="stVerticalBlockBorderWrapper"] {background: #1E2238;}
+[data-testid="stExpander"] details {background: #262B42;}
+/* πεδία και κουμπιά */
+.stButton button, .stDownloadButton button {border-radius: 999px; font-weight: 700; letter-spacing: .04em;}
+[data-baseweb="input"], [data-baseweb="select"] > div {border-radius: 12px;}
+h1 {font-weight: 800; letter-spacing: -.01em;}
+h3 {font-size: 1.15rem;}
+</style>
+"""
+st.markdown(STYLE, unsafe_allow_html=True)
 st.title("DaVinci Fitness")
 st.caption("Επίπεδο Normal · απώλεια λίπους και συντήρηση. Η αύξηση μυών δεν περιλαμβάνεται ακόμη. "
            "Τα δεδομένα δεν αποθηκεύονται: κλείνοντας τη σελίδα χάνονται.")
@@ -28,9 +60,24 @@ st.caption("Επίπεδο Normal · απώλεια λίπους και συντ
 TODAY = al.today()
 
 
-# ------------------------------------------------------------------ στοιχεία χρήστη (όλα τα πεδία, σε κατηγορίες)
-def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
-    with st.expander("1. Προσωπικά στοιχεία", expanded=True):
+# ------------------------------------------------------------------ στοιχεία χρήστη (όλα τα πεδία, σε περιοχές)
+# Περιοχές της καρτέλας «Μέτρηση»: (σύντομο όνομα καρτέλας, πλήρης τίτλος μέσα στην περιοχή).
+AREAS = (("Προσωπικά", "1. Προσωπικά στοιχεία"), ("Ζυγαριά", "2. Σύσταση σώματος (ζυγαριά)"),
+         ("Κορμός", "3. Περιφέρειες κορμού (μεζούρα)"), ("Άκρα", "4. Περιφέρειες άκρων (μεζούρα)"),
+         ("Ενυδάτωση", "5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"))
+PRO_AREAS = (("Όργανα", "6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)"),
+             ("Εξετάσεις", "7. Ιατρικές εξετάσεις (προαιρετικά)"))
+
+
+def read_inputs() -> tuple[al.PlanInput | None, al.Measures, str | None]:
+    """Όλα τα πεδία, σε περιοχές που διαλέγεις από πάνω. Επιστρέφει και το μήνυμα «Συμπλήρωσε: …» (ή None)."""
+    # Το επίπεδο διαλέγεται μέσα στην πρώτη περιοχή· οι περιοχές 6–7 υπάρχουν μόνο στο Professional (Στοιχείο 46).
+    pro = st.session_state.get("level") == "Professional"
+    areas = AREAS + (PRO_AREAS if pro else ())
+    tabs = dict(zip((a[0] for a in areas), st.tabs([a[0] for a in areas])))
+
+    with tabs["Προσωπικά"]:
+        st.caption(AREAS[0][1])
         birth = st.date_input("Ημερομηνία γέννησης", value=None, min_value=date(1900, 1, 1), max_value=TODAY,
                               format="DD/MM/YYYY", key="birth")
         sex = st.radio("Φύλο", e01.load_data()["sexes"], horizontal=True, key="sex")
@@ -57,7 +104,8 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         pal = st.selectbox("Επίπεδο δραστηριότητας (PAL)", list(pals), index=None, placeholder="Διάλεξε",
                            format_func=lambda k: f"{k.replace('.', ',')} — {pals[k]}", key="pal")
 
-    with st.expander("2. Σύσταση σώματος (ζυγαριά)", expanded=True):
+    with tabs["Ζυγαριά"]:
+        st.caption(AREAS[1][1])
         weight = measure_input("Βάρος (kg)", "weight", "βάρος", optional=False)
         fat = measure_input("Λίπος %", "fat", "λίπος % (ζυγαριά)", max_value=99.9, optional=False)
         muscle = measure_input("Μύες %", "m_muscle", "μύες % (ζυγαριά)", max_value=99.9)
@@ -67,14 +115,16 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
                                  "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0)
         amputation = st.checkbox("Ακρωτηριασμός (αλλάζει το βάρος)", key="m_amputation")
 
-    with st.expander("3. Περιφέρειες κορμού (μεζούρα)"):
+    with tabs["Κορμός"]:
+        st.caption(AREAS[2][1])
         neck = measure_input("Λαιμός (cm)", "m_neck", "λαιμός")
         chest = measure_input("Στήθος (cm)", "m_chest", "στήθος", extra=al.guide_extra("στήθος", sex))
         waist = measure_input("Μέση (cm)", "m_waist", "μέση")
         hip = measure_input("Ισχίο (cm)", "m_hip", "ισχίο")
         shoulders = measure_input("Ώμοι (cm)", "m_shoulders", "ώμοι")
 
-    with st.expander("4. Περιφέρειες άκρων (μεζούρα)"):
+    with tabs["Άκρα"]:
+        st.caption(AREAS[3][1])
         arm_rel = measure_input("Μπράτσο χαλαρό (cm)", "m_arm_rel", "δικέφαλος χαλαρός")
         biceps = measure_input("Δικέφαλος σφιγμένος (cm)", "m_biceps", "δικέφαλος σφιγμένος")
         fore_rel = measure_input("Πήχης χαλαρός (cm)", "m_fore_rel", "πήχης")
@@ -99,8 +149,10 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         lipedema = (st.checkbox("Έχω διάγνωση λιποιδήματος από γιατρό", key="m_lipedema")
                     if sex == "Γυναίκα" else False)
 
-    hydration = hydration_inputs()
-    medical = professional_inputs(sex, birth) if level == "Professional" else {}
+    with tabs["Ενυδάτωση"]:
+        st.caption(AREAS[4][1])
+        hydration = hydration_inputs()
+    medical = professional_inputs(sex, birth, tabs["Όργανα"], tabs["Εξετάσεις"]) if pro else {}
     m = al.Measures(waist_cm=waist, upper_thigh_cm=thigh, scale_visceral_level=visceral, scale_muscle_percent=muscle,
                     scale_water_percent=water, scale_bone_percent=bone, hip_cm=hip, neck_cm=neck, chest_cm=chest,
                     shoulders_cm=shoulders, arm_relaxed_cm=arm_rel, biceps_flexed_cm=biceps,
@@ -112,12 +164,11 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
     missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),
                               ("επίπεδο δραστηριότητας", pal)) if v is None]
     if missing:
-        st.info("Συμπλήρωσε: " + ", ".join(missing) + ".")
-        return None, m
+        return None, m, "Συμπλήρωσε: " + ", ".join(missing) + "."
     inp = al.PlanInput(birth_date=birth, sex=sex, height_cm=height, weight_kg=weight, fat_percent=fat, today=TODAY,
                        ancestry=ancestry, mixed_chosen_group=mixed, profile=profile, resistance_training=training,
                        pregnant=pregnant, breastfeeding=breastfeeding, pal=float(pal), level=level)
-    return inp, m
+    return inp, m, None
 
 
 def e46_levels() -> list[str]:
@@ -177,9 +228,10 @@ def skinfold_inputs(sex: str) -> dict:
                 sf_caliper_max=cmax)
 
 
-def professional_inputs(sex: str, birth) -> dict:
-    """Κατηγορίες 6 και 7: μόνο στο επίπεδο Professional (Στοιχείο 46)."""
-    with st.expander("6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)"):
+def professional_inputs(sex: str, birth, tab_tools, tab_medical) -> dict:
+    """Περιοχές 6 και 7: μόνο στο επίπεδο Professional (Στοιχείο 46)."""
+    with tab_tools:
+        st.caption(PRO_AREAS[0][1])
         elbow = measure_input("Εύρος αγκώνα (cm)", "p_elbow", "εύρος αγκώνα")
         elbow_left = st.checkbox("Μέτρηση στο αριστερό χέρι (το δεξί δεν μπορεί να μετρηθεί)", key="p_elbow_left")
         elbow_cond = st.checkbox("Κάταγμα, φλεγμονή ή οίδημα στον αγκώνα", key="p_elbow_cond")
@@ -194,7 +246,8 @@ def professional_inputs(sex: str, birth) -> dict:
         knee_edema = st.checkbox("Πρήξιμο ή μώλωπας στο γόνατο", key="p_knee_edema")
         knee_inj = st.checkbox("Τραυματισμός, πρόθεση ή αρθρίτιδα στο δεξί γόνατο", key="p_knee_inj")
         sf = skinfold_inputs(sex)
-    with st.expander("7. Ιατρικές εξετάσεις (προαιρετικά)"):
+    with tab_medical:
+        st.caption(PRO_AREAS[1][1])
         st.caption(al.medical_message())
         ct = measure_input("Σπλαχνικό λίπος — αξονική ή μαγνητική τομογραφία (cm²)", "x_ct", None)
         vol = measure_input("Σπλαχνικό λίπος — DXA ή μαγνητική: όγκος ή μάζα (μονάδα της γνωμάτευσης)", "x_vol", None)
@@ -302,48 +355,6 @@ def tab_plan(inp: al.PlanInput) -> None:
         show_presentation(res.presentation)
 
 
-# ------------------------------------------------------------------ κάρτα μέτρησης
-def tab_card(inp: al.PlanInput) -> None:
-    prep = al.prepare(inp)
-    if prep.errors:
-        st.error(prep.errors[0])
-        return
-    label = st.selectbox("Τι μετράς;", list(al.CARD_KINDS), key="card_kind")
-    kind = al.CARD_KINDS[label]
-    waist = kind == "circumference" and st.checkbox("Είναι η περιφέρεια της μέσης (στόχος: λόγος μέσης/ύψους κάτω από 0,50)",
-                                                    key="card_waist")
-    use_range = kind == "scale_fat_percent" and prep.fat is not None and prep.fat.profile_range is not None and \
-        st.checkbox("Με στόχο το εύρος λίπους του προφίλ σου", key="card_range")
-    st.write("Γράψε την ίδια μέτρηση σε διαφορετικές ημερομηνίες. Κάθε μέτρηση χρειάζεται συσκευή ή μέθοδο· "
-             "αν αλλάξεις συσκευή, η σύγκριση ξεκινά από την αρχή.")
-    st.caption("Πάτα το «+» πάνω δεξιά στον πίνακα για νέα γραμμή.")
-    rows = st.data_editor(
-        pd.DataFrame({"Ημερομηνία": pd.Series(dtype="datetime64[ns]"), "Τιμή": pd.Series(dtype="float64"),
-                      "Συσκευή / μέθοδος": pd.Series(dtype="object"), "ISAK": pd.Series(dtype="bool")}),
-        num_rows="dynamic", key="card_rows",
-        column_config={"Ημερομηνία": st.column_config.DateColumn("Ημερομηνία", format="DD/MM/YYYY"),
-                       "Τιμή": st.column_config.NumberColumn("Τιμή", min_value=0.0, format="%.1f"),
-                       "Συσκευή / μέθοδος": st.column_config.TextColumn("Συσκευή / μέθοδος"),
-                       "ISAK": st.column_config.CheckboxColumn("ISAK", help="Μέτρησε πιστοποιημένος εξεταστής ISAK")})
-    records = rows.to_dict("records") if hasattr(rows, "to_dict") else list(rows)
-    try:
-        clean = al.clean_rows(records)
-        if not clean:
-            st.info("Γράψε τουλάχιστον μία μέτρηση.")
-            return
-        card = al.measurement_card(kind, clean, prep.user, waist=bool(waist),
-                                   scale_fat_range=prep.fat.profile_range if use_range else None)
-    except (e01.InvalidInput, ValueError) as exc:
-        st.error(str(exc))
-        return
-    for name, value in card.lines():
-        st.markdown(f"**{name}:** {value}")
-    for m in card.messages:
-        st.write(m)
-    if card.info:
-        st.caption(card.info)
-
-
 # ------------------------------------------------------------------ μετρήσεις (Στοιχεία 05–39, σε δόσεις)
 def guide_box(field: str | None, extra: tuple[str, ...] = ()) -> None:
     if field is None:
@@ -356,6 +367,8 @@ def guide_box(field: str | None, extra: tuple[str, ...] = ()) -> None:
             st.markdown(f"{i}. {step}")
         for x in extra:
             st.info(x)
+        if g.protocol:
+            st.caption(g.protocol)
 
 
 OPTIONAL = "Προαιρετικό"
@@ -372,6 +385,11 @@ def measure_input(label: str, key: str, field: str | None, *, min_value: float |
 
 
 def show_section(sec: al.Section) -> None:
+    with st.container(border=True):
+        _section_body(sec)
+
+
+def _section_body(sec: al.Section) -> None:
     st.subheader(sec.title)
     if sec.indicative:
         st.warning("Ενδεικτική")
@@ -388,20 +406,19 @@ def show_section(sec: al.Section) -> None:
 
 def hydration_inputs() -> dict:
     """Στοιχείο 08, Πίνακας 7: καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό."""
-    with st.expander("5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"):
-        st.caption("Καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό.")
-        prev = [measure_input(f"Πρωινό βάρος πριν από {d} {'ημέρα' if d == 1 else 'ημέρες'} (kg)", f"m_prev{d}", None)
-                for d in (3, 2, 1)]
-        today = measure_input("Πρωινό βάρος σήμερα (kg)", "m_today", None)
-        urine = st.selectbox("Χρώμα πρώτων πρωινών ούρων (κλίμακα 1–8)", list(range(1, 9)), index=None,
-                             placeholder=OPTIONAL, key="m_urine")
-        thirst = measure_input("Δίψα (βαθμός στην κλίμακα)", "m_thirst", None, min_value=0.0)
+    st.caption("Καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό.")
+    prev = [measure_input(f"Πρωινό βάρος πριν από {d} {'ημέρα' if d == 1 else 'ημέρες'} (kg)", f"m_prev{d}", None)
+            for d in (3, 2, 1)]
+    today = measure_input("Πρωινό βάρος σήμερα (kg)", "m_today", None)
+    urine = st.selectbox("Χρώμα πρώτων πρωινών ούρων (κλίμακα 1–8)", list(range(1, 9)), index=None,
+                         placeholder=OPTIONAL, key="m_urine")
+    thirst = measure_input("Δίψα (βαθμός στην κλίμακα)", "m_thirst", None, min_value=0.0)
     return dict(previous_morning_weights=tuple(x for x in prev if x is not None), today_morning_weight=today,
                 urine_color=urine, thirst=thirst)
 
 
 def tab_results(inp: al.PlanInput, m: al.Measures) -> None:
-    st.caption("Αποτελέσματα από όσα συμπλήρωσες στις κατηγορίες 2–5· τα κενά πεδία παραλείπονται.")
+    st.caption("Αποτελέσματα από όσα συμπλήρωσες στην καρτέλα «Μέτρηση»· τα κενά πεδία παραλείπονται.")
     sections, errors = al.measurement_sections(inp, m)
     for e in errors:
         st.error(e)
@@ -409,31 +426,21 @@ def tab_results(inp: al.PlanInput, m: al.Measures) -> None:
         show_section(sec)
 
 
-# ------------------------------------------------------------------ οδηγίες μέτρησης
-def tab_guides() -> None:
-    field = st.selectbox("Τι θέλεις να μετρήσεις;", list(measurement.fields()), key="guide_field")
-    g = measurement.guide(field)
-    if g is None:
-        st.info("Αυτό το πεδίο είναι δήλωση, όχι μέτρηση.")
-        return
-    st.subheader(g.title)
-    for i, step in enumerate(g.steps, start=1):
-        st.markdown(f"{i}. {step}")
-    if g.protocol:
-        st.caption(g.protocol)
-
-
 # ------------------------------------------------------------------ σελίδα
-inputs, measures = read_inputs()
-tab1, tab_m, tab2, tab3 = st.tabs(["Πλάνο", "Αποτελέσματα", "Κάρτα μέτρησης", "Οδηγίες μέτρησης"])
-with tab1:
-    if inputs is not None:
-        tab_plan(inputs)
-with tab_m:
+# Σειρά καρτελών (απόφαση του χρήστη, 11/11/2026): Μέτρηση → Αποτελέσματα → Πλάνο.
+# Οι οδηγίες μέτρησης βρίσκονται μόνο στο ⓘ κάθε πεδίου· η κάρτα μέτρησης (Στοιχείο 45) δεν εμφανίζεται.
+tab_in, tab_res, tab_pl = st.tabs(["Μέτρηση", "Αποτελέσματα", "Πλάνο"])
+with tab_in:
+    inputs, measures, todo = read_inputs()
+    if todo:
+        st.info(todo)
+with tab_res:
     if inputs is not None:
         tab_results(inputs, measures)
-with tab2:
+    else:
+        st.info(todo)
+with tab_pl:
     if inputs is not None:
-        tab_card(inputs)
-with tab3:
-    tab_guides()
+        tab_plan(inputs)
+    else:
+        st.info(todo)

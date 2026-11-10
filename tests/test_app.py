@@ -238,6 +238,7 @@ class FakeSt:
     def __init__(self, values):
         self.values, self.shown, self.errors = values, [], []
         self.inputs, self.expanders, self.group, self.options, self.placeholders = [], [], None, {}, {}
+        self.tab_sets, self.session_state = [], dict(values)  # οι τιμές των πεδίων ζουν στο session_state ανά key
         self.column_config = types.SimpleNamespace(**{n: (lambda *a, **k: {"col": n}) for n in
                                                       ("DateColumn", "NumberColumn", "TextColumn", "CheckboxColumn")})
 
@@ -279,7 +280,25 @@ class FakeSt:
         return [self for _ in range(n)]
 
     def tabs(self, names):
-        return [Ctx() for _ in names]
+        """Κάθε καρτέλα γίνεται η ομάδα των πεδίων της (η εσωτερική καρτέλα υπερισχύει της εξωτερικής)."""
+        self.tab_sets.append(list(names))
+        fake = self
+
+        class Tab:
+            def __init__(self, name):
+                self.name = name
+
+            def __enter__(self):
+                self.prev, fake.group = fake.group, self.name
+                return self
+
+            def __exit__(self, *a):
+                fake.group = self.prev
+                return False
+        return [Tab(n) for n in names]
+
+    def container(self, *a, **k):
+        return Ctx()
 
     def expander(self, label, *a, **k):
         self.expanders.append(label)
@@ -315,7 +334,7 @@ def run_app(monkeypatch, values):
     mod = types.ModuleType("streamlit")
     mod.__dict__.update({n: getattr(fake, n) for n in (
         "date_input", "number_input", "radio", "selectbox", "checkbox", "data_editor", "columns", "tabs",
-        "expander", "column_config")})
+        "expander", "container", "column_config", "session_state")})
     mod.__getattr__ = lambda name: getattr(fake, name)
     monkeypatch.setitem(sys.modules, "streamlit", mod)
     monkeypatch.setattr(al, "today", lambda: TODAY)
@@ -356,22 +375,23 @@ def test_screen_full_plan(monkeypatch):
         assert part in t
 
 
-def test_screen_card_tab(monkeypatch):
+def test_screen_tabs_order_and_no_card_or_guides_tab(monkeypatch):
+    # απόφαση του χρήστη (11/11/2026): Μέτρηση → Αποτελέσματα → Πλάνο· χωρίς «Κάρτα μέτρησης» και «Οδηγίες μέτρησης»
     rows = pd.DataFrame({"Ημερομηνία": pd.to_datetime([r[0] for r in WAIST]), "Τιμή": [r[1] for r in WAIST],
                          "Συσκευή / μέθοδος": ["μεζούρα"] * 4, "ISAK": [False] * 4})
-    vals = {**WOMAN, "sex": "Άνδρας", "height": 177.0, "weight": 90.0, "fat": 25.0, "card_waist": True,
-            "card_rows": rows, "aha": 500}
-    f = run_app(monkeypatch, vals)
+    f = run_app(monkeypatch, {**WOMAN, "card_rows": rows, "card_waist": True, "aha": 500})
+    assert f.tab_sets[0] == ["Μέτρηση", "Αποτελέσματα", "Πλάνο"]
+    assert f.tab_sets[1] == ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"] and len(f.tab_sets) == 2
     md = [a[0] for n, a, k in f.shown if n == "markdown"]
-    assert not f.errors and "**Τρέχον:** 95,9 cm" in md
-    assert any(x.startswith("**Αλλαγή από την αρχική:** −5,1 cm") for x in md)
+    assert not f.errors and not any(x.startswith("**Τρέχον:**") for x in md)
+    assert "Γράψε τουλάχιστον μία μέτρηση." not in f.texts()
+    src = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+    assert "data_editor" not in src and "tab_card" not in src and "tab_guides" not in src
 
 
-def test_screen_card_half_row_is_an_error_not_skipped(monkeypatch):
-    rows = pd.DataFrame({"Ημερομηνία": pd.to_datetime([None]), "Τιμή": [90.0], "Συσκευή / μέθοδος": ["μεζούρα"],
-                         "ISAK": [False]})
-    f = run_app(monkeypatch, {**WOMAN, "card_rows": rows, "aha": 500})
-    assert any("Γραμμή 1" in e for e in f.errors)
+def test_screen_missing_fields_message_in_every_tab(monkeypatch):
+    f = run_app(monkeypatch, {"birth": date(1990, 1, 1), "height": 170.0})
+    assert f.texts().count("Συμπλήρωσε: βάρος, λίπος, επίπεδο δραστηριότητας.") == 3
 
 
 def test_screen_guides_show_numbered_steps(monkeypatch):
@@ -379,8 +399,15 @@ def test_screen_guides_show_numbered_steps(monkeypatch):
     f = run_app(monkeypatch, dict(WOMAN))
     steps = measurement.guide(first).steps
     md = [a[0] for n, a, k in f.shown if n == "markdown"]
-    # μία φορά στο ⓘ του πεδίου «Ύψος» και μία στην καρτέλα «Οδηγίες μέτρησης»
-    assert md.count(f"1. {steps[0]}") == 2 and f"{len(steps)}. {steps[-1]}" in md
+    # μόνο στο ⓘ του πεδίου «Ύψος»· η καρτέλα «Οδηγίες μέτρησης» αφαιρέθηκε
+    assert md.count(f"1. {steps[0]}") == 1 and f"{len(steps)}. {steps[-1]}" in md
+
+
+def test_screen_guide_protocol_shown_inside_info(monkeypatch):
+    # η γραμμή «πρωτόκολλο» φαινόταν μόνο στην καρτέλα «Οδηγίες μέτρησης»· τώρα μέσα στο ⓘ
+    f = run_app(monkeypatch, {**WOMAN, "level": "Professional"})
+    for field in ("δερματοπτυχή τρικεφάλου", "δερματοπτυχή υποπλάτιου"):
+        assert measurement.guide(field).protocol in f.texts()
 
 
 def test_files_for_deployment_exist():
@@ -533,11 +560,6 @@ def test_screen_measures_tab(monkeypatch):
     assert "Ενδεικτική" in [a[0] for n, a, k in f.shown if n == "warning"]
     steps = measurement.guide("μέση").steps
     assert md.count(f"1. {steps[0]}") >= 1  # οδηγίες δίπλα στο πεδίο
-
-
-def test_screen_card_starts_empty(monkeypatch):
-    f = run_app(monkeypatch, dict(WOMAN))
-    assert "Γράψε τουλάχιστον μία μέτρηση." in f.texts()
 
 
 def test_e07_target_carries_element03_messages():
@@ -799,9 +821,11 @@ def test_screen_batch3(monkeypatch):
 
 def test_screen_inputs_grouped_in_categories(monkeypatch):
     f = run_app(monkeypatch, {})
-    top = ["1. Προσωπικά στοιχεία", "2. Σύσταση σώματος (ζυγαριά)", "3. Περιφέρειες κορμού (μεζούρα)",
-           "4. Περιφέρειες άκρων (μεζούρα)", "5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"]
-    assert [e for e in f.expanders if e[:2] in ("1.", "2.", "3.", "4.", "5.")] == top
+    full = ["1. Προσωπικά στοιχεία", "2. Σύσταση σώματος (ζυγαριά)", "3. Περιφέρειες κορμού (μεζούρα)",
+            "4. Περιφέρειες άκρων (μεζούρα)", "5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"]
+    top = ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"]  # περιοχές, ως καρτέλες μέσα στη «Μέτρηση»
+    assert f.tab_sets[1] == top and all(x in f.texts() for x in full)
+    assert not any(e[:2] in ("1.", "2.", "3.", "4.", "5.") for e in f.expanders)
     where = {label: g for g, label in f.inputs}
     assert where["Ύψος (cm)"] == top[0]
     assert {where[x] for x in ("Βάρος (kg)", "Λίπος %", "Μύες %", "Υγρά %", "Οστά %")} == {top[1]}
@@ -841,11 +865,11 @@ def test_required_fields_have_no_placeholder_optional_do(monkeypatch):
 
 def test_normal_hides_professional_categories(monkeypatch):
     f = run_app(monkeypatch, dict(WOMAN))
-    assert not any(e.startswith(("6.", "7.")) for e in f.expanders)
+    assert f.tab_sets[1] == ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"]
     assert any(t.startswith("Όργανα: ") and "Δερματοπτυχόμετρο" not in t for t in f.texts())
     p = run_app(monkeypatch, {**WOMAN, "level": "Professional", "x_meno": "Ναι"})
-    assert [e for e in p.expanders if e.startswith(("6.", "7."))] == [
-        "6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)", "7. Ιατρικές εξετάσεις (προαιρετικά)"]
+    assert p.tab_sets[1][5:] == ["Όργανα", "Εξετάσεις"]
+    assert {"6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)", "7. Ιατρικές εξετάσεις (προαιρετικά)"} <= set(p.texts())
     assert e46.load_data()["messages"]["N3"] in p.texts() and e46.medical_entry_message() in p.texts()
     assert p.options["x_meno"] == ["Ναι", "Όχι"] and not p.errors
 
@@ -1036,8 +1060,8 @@ def test_screen_batch4(monkeypatch):
     md = [a[0] for n, a, k in f.shown if n == "markdown"]
     assert "**Μπράτσο χαλαρό:** 30,0 cm" in md and "**Πήχης σφιγμένος:** 25,0 cm" in md
     where = {label: g for g, label in f.inputs}
-    assert where["Ώμοι (cm)"].startswith("3.") and where["Μπράτσο χαλαρό (cm)"].startswith("4.")
-    assert where["Πήχης σφιγμένος (cm)"].startswith("4.") and f.placeholders["Ώμοι (cm)"] == "Προαιρετικό"
+    assert where["Ώμοι (cm)"] == "Κορμός" and where["Μπράτσο χαλαρό (cm)"] == "Άκρα"
+    assert where["Πήχης σφιγμένος (cm)"] == "Άκρα" and f.placeholders["Ώμοι (cm)"] == "Προαιρετικό"
 
 
 # ================================================================ Δόση 5: 17, 18, 19
@@ -1107,7 +1131,7 @@ def test_screen_batch5(monkeypatch):
     assert not f.errors and {"Καρπός (Στοιχείο 17)", "Μηρός (Στοιχείο 18)", "Πάνω από το γόνατο (Στοιχείο 19)"} <= set(subs)
     assert "**Μέτρηση:** 58,0 cm" in md and e19.load_data()["messages"]["swollen"] in f.texts()
     where = {label: g for g, label in f.inputs}
-    assert all(where[x].startswith("4.") for x in ("Καρπός (cm)", "Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)",
+    assert all(where[x] == "Άκρα" for x in ("Καρπός (cm)", "Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)",
                                                     "Πάνω από το γόνατο (cm)"))
 
 
@@ -1193,7 +1217,7 @@ def test_screen_batch6(monkeypatch):
     assert e20.load_data()["messages"]["edema"] in f.texts() and e21.load_data()["messages"]["edema"] in f.texts()
     assert e21.load_data()["messages"]["T"] in f.texts()  # δίπλα στο πεδίο
     where = {label: g for g, label in f.inputs}
-    assert where["Γάμπα (cm)"].startswith("4.") and where["Αστράγαλος (cm)"].startswith("4.")
+    assert where["Γάμπα (cm)"] == "Άκρα" and where["Αστράγαλος (cm)"] == "Άκρα"
     f2 = run_app(monkeypatch, {**WOMAN, "m_ankle": 21.5, "m_ankle_injured": True})
     assert e21.load_data()["messages"]["injury"] in f2.texts() and e20.load_data()["messages"]["edema"] not in f2.texts()
 
@@ -1506,7 +1530,7 @@ def test_screen_batch9(monkeypatch):
     md = [a[0] for n, a, k in f.shown if n == "markdown"]
     assert "**Σκελετός:** Μεσαίος" in md and "**Ποιος μέτρησε · πλευρά:** Άλλο άτομο · δεξί πόδι" in md
     where = {label: g for g, label in f.inputs}
-    assert where["Εύρος αγκώνα (cm)"].startswith("6.") and where["Εύρος γονάτου — 1η μέτρηση (cm)"].startswith("6.")
+    assert where["Εύρος αγκώνα (cm)"] == "Όργανα" and where["Εύρος γονάτου — 1η μέτρηση (cm)"] == "Όργανα"
     assert "ⓘ " + e30.info()["info_title"] in f.expanders and "ⓘ " + e31.info()["info_title"] in f.expanders
     f2 = run_app(monkeypatch, {**vals, "p_knee_by": "Ο ίδιος", "p_elbow_left": True})
     assert e31.load_data()["messages"]["self"] in f2.texts() and e30.load_data()["messages"]["A"] in f2.texts()
@@ -1617,7 +1641,7 @@ def test_screen_batch10(monkeypatch):
                              "Δερματοπτυχή υπερακάνθιου (Στοιχείο 35)", "Δερματοπτυχή γάμπας (Στοιχείο 36)"} <= set(subs)
     assert e35.before_message() in f.texts() and e36.before_message() in f.texts()
     where = {label: g for g, label in f.inputs}
-    assert where["Τρικέφαλος — 1η μέτρηση (mm)"].startswith("6.")
+    assert where["Τρικέφαλος — 1η μέτρηση (mm)"] == "Όργανα"
     for t in ("τρικεφάλου", "υποπλάτιου", "υπερακάνθιου", "γάμπας"):
         assert any(x.startswith("ⓘ") and t in x for x in f.expanders), t
     assert any(n == "dataframe" for n, a, k in f.shown)  # πίνακας αθλητών

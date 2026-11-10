@@ -1639,3 +1639,121 @@ def test_screen_batch10_defaults_and_options(monkeypatch):
     assert e36.load_data()["reasons"]["not_at_max_girth"] in text and e36.load_data()["messages"]["varicose"] in text
     nm = run_app(monkeypatch, {**WOMAN, "level": "Professional", "p_tri_nm": True})
     assert e33.load_data()["messages"]["not_measured"] in nm.texts()
+
+
+# ---- Δόση 11: Στοιχεία 37, 38, 39 και 46 (Normal) ----
+from davinci import element_37 as e37  # noqa: E402
+from davinci import element_38 as e38  # noqa: E402
+from davinci import element_39 as e39  # noqa: E402
+from davinci import element_46 as e46  # noqa: E402
+
+SOMA = dict(**HARP, triceps=SF((9.2, 9.2)), subscapular=SF((12.0, 12.0)), supraspinale=SF((8.0, 8.0)),
+            supraspinale_site_confirmed=True, calf_skinfold=SF((7.1, 7.1)), calf_cm=38.0, elbow_cm=7.0,
+            knee_breadths=(9.5, 9.5), biceps_flexed_cm=36.0)
+
+
+def man30b(**kw):  # παραδείγματα 37–39: άνδρας 30 ετών, 177 cm, 75 kg
+    return man37(birth_date=date(1996, 1, 1), height_cm=177.0, weight_kg=75.0, fat_percent=15.0, **kw)
+
+
+def test_e37_e38_e39_document_examples():
+    m = al.Measures(**SOMA)
+    en = sec(man30b(**PRO), m, "Ενδομορφία (")
+    assert en.lines == (("Ενδομορφία", "2,9"), ("Κλίμακα Heath-Carter", "μέτρια")) and en.indicative
+    assert any("4,25 ± 1,52" in x and "1,35 κάτω" in x for x in en.messages)
+    me = sec(man30b(**PRO), m, "Μεσομορφία")
+    assert me.lines == (("Μεσομορφία", "5,6"), ("Διορθωμένο μπράτσο", "35,08 cm"), ("Διορθωμένη γάμπα", "37,29 cm"),
+                        ("Κλίμακα Heath-Carter", "υψηλή"))
+    assert any("5,59 ± 1,62" in x for x in me.messages) and me.indicative
+    assert e38.load_data()["messages"]["high_endomorphy"] not in me.messages  # 2,9 < 5,5
+    ec = sec(man30b(**PRO), m, "Εκτομορφία")
+    assert ec.lines == (("HWR (ύψος / ∛βάρος)", "41,97"), ("Εκτομορφία", "2,1"), ("Κλίμακα Heath-Carter", "χαμηλή"))
+    assert any("1,49 ± 1,14" in x for x in ec.messages)
+    big = sec(man139(), al.Measures(), "Εκτομορφία")  # Στοιχείο 46, Πίνακας 6: 0,1 και στο Normal
+    assert dict(big.lines)["Εκτομορφία"] == "0,1" and e39.load_data()["messages"]["floor"] in big.messages
+
+
+def test_e46_normal_messages():
+    d = e46.load_data()["messages"]
+    f = sec(man139(), al.Measures(), "Σκελετός (Στοιχείο 32)")
+    assert f.lines == (("Σκελετός", "Δεν έχει οριστεί"),) and f.messages == (d["S"],)
+    t = sec(man139(), al.Measures(), "Εύρη οστών και δερματοπτυχές")
+    assert t.messages == (e46.normal_message("30"), e46.normal_message("33"))
+    so = sec(man139(), al.Measures(), "Ενδομορφία και μεσομορφία")
+    assert so.messages == (e46.normal_message("37"),) and e46.normal_message("37").startswith("Στο Normal")
+    for title in ("Ενδομορφία (", "Μεσομορφία", "Σκελετός — εύρος αγκώνα", "Εύρος γονάτου"):
+        assert sec(man139(), al.Measures(**SOMA), title) is None, title  # στο Normal δεν υπολογίζονται
+    for title in ("Σκελετός (Στοιχείο 32)", "Εύρη οστών και δερματοπτυχές", "Ενδομορφία και μεσομορφία"):
+        assert sec(man139(**PRO), al.Measures(), title) is None, title
+
+
+def test_e37_cases():
+    m37 = e37.load_data()["messages"]
+    miss = sec(man30b(**PRO), al.Measures(**HARP, triceps=SF((9.2, 9.2))), "Ενδομορφία (")
+    assert miss.lines == () and miss.messages == (m37["missing"].replace("[τιμή]", "υποπλάτια, υπερακάνθια"),)
+    third = sec(man30b(**PRO), al.Measures(**{**SOMA, "subscapular": SF((10.0, 12.0))}), "Ενδομορφία (")
+    assert third.messages == (m37["missing"].replace("[τιμή]", "υποπλάτια"),)  # χωρίς τελική τιμή → λείπει
+    no_cal = sec(man30b(**PRO), al.Measures(**{**SOMA, "sf_caliper": None}), "Ενδομορφία (")
+    assert no_cal.lines == () and no_cal.messages == (
+        m37["missing"].replace("[τιμή]", "τρικέφαλος, υποπλάτια, υπερακάνθια"),)
+    site = sec(man30b(**PRO), al.Measures(**{**SOMA, "supraspinale_site_confirmed": None}), "Ενδομορφία (")
+    assert any(e35.load_data()["reasons"]["site_unknown"] in x for x in site.messages) and site.indicative
+    il = al.Measures(**SOMA, supraspinale_is_iliac=True)
+    assert sec(man30b(**PRO), il, "Ενδομορφία (").messages == (m37["iliac"],)
+    s35 = sec(man30b(**PRO), il, "Δερματοπτυχή υπερακάνθιου")
+    assert s35.lines == (("Μετρήσεις", "8,0 · 8,0 mm"),) and s35.messages == (m37["iliac"],) and s35.indicative
+    cmax = sec(man30b(**PRO), al.Measures(**SOMA, sf_caliper_max=True), "Ενδομορφία (")
+    assert cmax.lines[0] == ("Ενδομορφία", "τουλάχιστον 2,9") and m37["caliper_max"].replace("[E]", "2,9") in cmax.messages
+    lange = sec(man30b(**PRO), al.Measures(**{**SOMA, "sf_caliper": "Lange"}), "Ενδομορφία (")
+    assert any("δαγκάνα Lange" in x for x in lange.messages)
+    preg = sec(man37(sex="Γυναίκα", height_cm=165.0, pregnant=True, **PRO), al.Measures(**SOMA), "Ενδομορφία (")
+    assert len(preg.lines) == 1 and m37["pregnancy"] in preg.messages
+
+
+def test_e38_cases():
+    m38 = e38.load_data()["messages"]
+    left = sec(man30b(**PRO), al.Measures(**SOMA, elbow_left_arm=True, knee_breadth_edema=True), "Μεσομορφία")
+    assert any(al.MESOMORPHY_REASONS["elbow_left"] in x and al.MESOMORPHY_REASONS["knee_uncertain"] in x
+               for x in left.messages)
+    cond = sec(man30b(**PRO), al.Measures(**SOMA, elbow_condition=True), "Μεσομορφία")
+    assert cond.messages == (m38["missing"].replace("[μέτρηση]", "εύρος αγκώνα"),)
+    knee1 = sec(man30b(**PRO), al.Measures(**{**SOMA, "knee_breadths": (9.5,)}), "Μεσομορφία")
+    assert knee1.messages == (m38["missing"].replace("[μέτρηση]", "εύρος γονάτου"),)
+    no_cal = sec(man30b(**PRO), al.Measures(**{**SOMA, "sf_caliper": None}), "Μεσομορφία")
+    assert no_cal.messages == (m38["missing"].replace("[μέτρηση]", "δερματοπτυχή τρικεφάλου, δερματοπτυχή γάμπας"),)
+    none = sec(man30b(**PRO), al.Measures(), "Μεσομορφία")
+    assert none.lines == () and "εύρος αγκώνα, εύρος γονάτου" in none.messages[0]
+    fat = sec(man30b(**PRO), al.Measures(**{**SOMA, "triceps": SF((30.0, 30.0)), "subscapular": SF((40.0, 40.0)),
+                                           "supraspinale": SF((35.0, 35.0))}), "Μεσομορφία")
+    assert m38["high_endomorphy"] in fat.messages
+
+
+def test_e39_conditions():
+    m39 = e39.load_data()["messages"]
+    s = sec(man30b(), al.Measures(amputation=True, leg_edema=True), "Εκτομορφία")
+    assert s.indicative and m39["condition"].replace("[το οίδημα/ο ακρωτηριασμός]", "ο ακρωτηριασμός") in s.messages
+    assert m39["condition"].replace("[το οίδημα/ο ακρωτηριασμός]", "το οίδημα") in s.messages
+    preg = sec(man37(sex="Γυναίκα", height_cm=165.0, weight_kg=70.0, fat_percent=30.0, pregnant=True),
+               al.Measures(), "Εκτομορφία")
+    assert m39["pregnancy"] in preg.messages and "Κλίμακα Heath-Carter" not in dict(preg.lines)
+
+
+def test_screen_batch11(monkeypatch):
+    f = run_app(monkeypatch, {**WOMAN, "m_amputation": True})
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors and {"Σκελετός (Στοιχείο 32)", "Εύρη οστών και δερματοπτυχές (Στοιχεία 30, 31, 33–36)",
+                             "Ενδομορφία και μεσομορφία (Στοιχεία 37, 38)", "Εκτομορφία (Στοιχείο 39)"} <= set(subs)
+    assert e39.load_data()["messages"]["condition"].replace("[το οίδημα/ο ακρωτηριασμός]", "ο ακρωτηριασμός") in f.texts()
+    vals = {**WOMAN, "level": "Professional", "p_caliper": "Harpenden / Holtain", "p_isak": "Ναι",
+            "p_tri1": 15.0, "p_tri2": 15.0, "p_sub1": 12.0, "p_sub2": 12.0, "p_sup1": 10.0, "p_sup2": 10.0,
+            "p_sup_site": "Ναι", "p_calf1": 12.0, "p_calf2": 12.0, "m_calf": 37.0, "p_elbow": 6.4,
+            "p_knee1": 9.0, "p_knee2": 9.0, "m_biceps": 30.0}
+    g = run_app(monkeypatch, vals)
+    subs = [a[0] for n, a, k in g.shown if n == "subheader"]
+    assert not g.errors and {"Ενδομορφία (Στοιχείο 37)", "Μεσομορφία (Στοιχείο 38)", "Εκτομορφία (Στοιχείο 39)"} <= set(subs)
+    md = [a[0] for n, a, k in g.shown if n == "markdown"]
+    assert any(x.startswith("**Ενδομορφία:**") for x in md) and any(x.startswith("**Μεσομορφία:**") for x in md)
+    il = run_app(monkeypatch, {**vals, "p_sup_site": "Όχι, στο πλάι (λαγόνια ακρολοφία)"})
+    assert e37.load_data()["messages"]["iliac"] in il.texts()
+    cm = run_app(monkeypatch, {**vals, "p_caliper_max": True})
+    assert any(x.startswith("**Ενδομορφία:** τουλάχιστον") for n, a, k in cm.shown if n == "markdown" for x in a[:1])

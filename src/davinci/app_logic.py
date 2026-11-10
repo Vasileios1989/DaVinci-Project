@@ -352,6 +352,9 @@ class Measures:
     calf_skinfold: Skinfold = Skinfold()
     calf_skinfold_at_max_girth: bool = True
     calf_varicose: bool = False  # κιρσοί στη δεξιά γάμπα → μέτρηση αριστερά
+    supraspinale_is_iliac: bool = False  # μετρήθηκε στο πλάι (λαγόνια ακρολοφία): δεν τη δέχεται η ενδομορφία
+    sf_caliper_max: bool = False  # μία από τις τρεις πτυχές της ενδομορφίας έφτασε το μέγιστο άνοιγμα της δαγκάνας
+    amputation: bool = False  # Στοιχείο 39: ο ακρωτηριασμός αλλάζει το βάρος
 
 
 @dataclass(frozen=True)
@@ -973,9 +976,9 @@ def section_frame(m: Measures, user: e01.UserCategories) -> Section | None:
     """Στοιχεία 30 και 32 (μόνο Professional): κατάταξη με το NHANES III και, για την ομάδα 1 18–74 ετών,
     δεύτερη σύγκριση με τη Δαλματία (Πίνακες 3–7)· πάντα «Ενδεικτική», χωρίς χρώμα κινδύνου."""
     from davinci import element_46 as e46
-    if not e46.element_available("30", user.level):
-        return None
     r = _frame(m, user)
+    if not e46.element_available("30", user.level):  # Στοιχείο 46, Πίνακας 4: «Δεν έχει οριστεί» με το μήνυμα Σ
+        return Section("Σκελετός (Στοιχείο 32)", (("Σκελετός", r.frame),), r.messages)
     e = r.elbow
     lines = [] if e.elbow_cm is None else [("Εύρος αγκώνα", f"{_n(e.elbow_cm)} cm")]
     lines.append(("Σκελετός", r.frame))
@@ -1084,7 +1087,13 @@ def section_subscapular(m: Measures, user: e01.UserCategories) -> Section | None
 def section_supraspinale(m: Measures, user: e01.UserCategories) -> Section | None:
     """Στοιχείο 35: μέσος όρος ± ΤΑ (Campa 2025), χωρίς εκατοστημόριο· επιβεβαίωση σημείου."""
     from davinci import element_35 as e35
+    from davinci import element_37 as e37
+    from davinci import element_46 as e46
     sf = m.supraspinale
+    if m.supraspinale_is_iliac and sf.mm and e46.element_available("35", user.level):
+        return Section("Δερματοπτυχή υπερακάνθιου (Στοιχείο 35)",
+                       (("Μετρήσεις", " · ".join(_n(x) for x in sf.mm) + " mm"),),
+                       (e37.load_data()["messages"]["iliac"],), True)
     return _skinfold_section(
         "Δερματοπτυχή υπερακάνθιου (Στοιχείο 35)", sf, user,
         lambda mm: e35.assess(mm, user, site_confirmed=m.supraspinale_site_confirmed, isak=m.sf_isak,
@@ -1117,6 +1126,115 @@ def skinfold_notes() -> dict[str, str]:
     return {"35": e35.before_message(), "36": e36.before_message()}
 
 
+def section_normal_tools(user: e01.UserCategories) -> Section | None:
+    """Στοιχείο 46, Πίνακας 4: στο Normal δεν ζητούνται εύρη οστών και δερματοπτυχές· μήνυμα Ν1 για το καθένα."""
+    from davinci import element_46 as e46
+    if e46.element_available("30", user.level):
+        return None
+    return Section("Εύρη οστών και δερματοπτυχές (Στοιχεία 30, 31, 33–36)", (),
+                   _dedupe(e46.normal_message(k) for k in ("30", "31", "33", "34", "35", "36")))
+
+
+def _skinfold_value(sf: Skinfold, run):
+    """Το αποτέλεσμα μιας δερματοπτυχής για τον σωματότυπο· χωρίς τελική τιμή (λείπει, τρίτη μέτρηση,
+    επιβεβαίωση) τα Στοιχεία 37 και 38 τη μετρούν ως «Λείπει»· None όταν η είσοδος δεν γίνεται δεκτή
+    (π.χ. δαγκάνα που δεν δηλώθηκε)."""
+    try:
+        return run(list(sf.mm) or None)
+    except e01.InvalidInput:
+        return None
+
+
+def _endomorphy(m: Measures, user: e01.UserCategories):
+    from davinci import element_33 as e33
+    from davinci import element_34 as e34
+    from davinci import element_35 as e35
+    from davinci import element_37 as e37
+    tri = _skinfold_value(m.triceps, lambda mm: e33.assess(
+        mm, user, isak=m.sf_isak, caliper=m.sf_caliper, left_side=m.triceps.left_side, confirmed=m.triceps.confirmed,
+        edema=m.triceps.edema, postpartum_recent=m.postpartum_recent))
+    sub = _skinfold_value(m.subscapular, lambda mm: e34.assess(
+        mm, user, isak=m.sf_isak, caliper=m.sf_caliper, left_side=m.subscapular.left_side,
+        confirmed=m.subscapular.confirmed, edema=m.subscapular.edema))
+    sup = _skinfold_value(m.supraspinale, lambda mm: e35.assess(
+        mm, user, site_confirmed=m.supraspinale_site_confirmed, isak=m.sf_isak, caliper=m.sf_caliper,
+        left_side=m.supraspinale.left_side, confirmed=m.supraspinale.confirmed, edema=m.supraspinale.edema))
+    return e37.compute(tri, sub, sup, user, supraspinale_is_iliac=m.supraspinale_is_iliac,
+                       caliper_max=m.sf_caliper_max), tri
+
+
+def section_somatotype_normal(user: e01.UserCategories) -> Section | None:
+    """Στοιχείο 46: στο Normal η ενδομορφία και η μεσομορφία δεν υπολογίζονται (μήνυμα Ν2)."""
+    from davinci import element_46 as e46
+    if e46.element_available("37", user.level):
+        return None
+    return Section("Ενδομορφία και μεσομορφία (Στοιχεία 37, 38)", (), (e46.normal_message("37"),))
+
+
+def section_endomorphy(m: Measures, user: e01.UserCategories) -> Section | None:
+    """Στοιχείο 37 (μόνο Professional): τύπος Carter με διόρθωση ύψους, κλίμακα, σύγκριση (Πίνακες 3–5)."""
+    from davinci import element_46 as e46
+    if not e46.element_available("37", user.level):
+        return None
+    r, _ = _endomorphy(m, user)
+    lines = []
+    if r.value is not None:
+        lines.append(("Ενδομορφία", ("τουλάχιστον " if r.at_least else "") + _n(r.value)))
+        if r.scale:
+            lines.append(("Κλίμακα Heath-Carter", r.scale))
+    return Section("Ενδομορφία (Στοιχείο 37)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def section_mesomorphy(m: Measures, user: e01.UserCategories, weight_kg: float) -> Section | None:
+    """Στοιχείο 38 (μόνο Professional): εύρη αγκώνα και γονάτου, διορθωμένο μπράτσο και γάμπα, ύψος.
+    Η «Ενδεικτική» της μέτρησης περνά στη μεσομορφία (σύμβαση εφαρμογής για τη διατύπωση των λόγων)."""
+    from davinci import element_31 as e31
+    from davinci import element_36 as e36
+    from davinci import element_38 as e38
+    from davinci import element_46 as e46
+    if not e46.element_available("38", user.level):
+        return None
+    endo, tri = _endomorphy(m, user)
+    try:
+        knee = e31.assess(list(m.knee_breadths), user, weight_kg, measured_by=m.knee_measured_by, side=m.knee_side,
+                          edema_or_bruise=m.knee_breadth_edema, injured_right=m.knee_breadth_injured)
+    except e01.InvalidInput:
+        knee = None
+    calf_sf = _skinfold_value(m.calf_skinfold, lambda mm: e36.assess(
+        mm, user, weight_kg, calf_cm=m.calf_cm, at_max_girth=m.calf_skinfold_at_max_girth, isak=m.sf_isak,
+        caliper=m.sf_caliper, left_varicose=m.calf_varicose, left_side=m.calf_skinfold.left_side,
+        edema_or_cellulite=m.calf_skinfold.edema, confirmed=m.calf_skinfold.confirmed))
+    extra = []
+    if m.elbow_left_arm:
+        extra.append(MESOMORPHY_REASONS["elbow_left"])
+    if knee is not None and knee.uncertain:
+        extra.append(MESOMORPHY_REASONS["knee_uncertain"])
+    r = e38.compute(None if m.elbow_condition else m.elbow_cm, None if knee is None else knee.knee_breadth_cm,
+                    m.biceps_flexed_cm, m.calf_cm, tri, calf_sf, user, endomorphy=endo.value,
+                    extra_reasons=tuple(extra))
+    lines = []
+    if r.value is not None:
+        lines += [("Μεσομορφία", _n(r.value)), ("Διορθωμένο μπράτσο", f"{_n(r.corrected_arm_cm, 2)} cm"),
+                  ("Διορθωμένη γάμπα", f"{_n(r.corrected_calf_cm, 2)} cm")]
+        if r.scale:
+            lines.append(("Κλίμακα Heath-Carter", r.scale))
+    return Section("Μεσομορφία (Στοιχείο 38)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+MESOMORPHY_REASONS = {"elbow_left": "εύρος αγκώνα στο αριστερό χέρι",
+                      "knee_uncertain": "αβέβαιο εύρος γονάτου (πρήξιμο, μώλωπας ή αριστερό πόδι)"}
+
+
+def section_ectomorphy(m: Measures, user: e01.UserCategories, weight_kg: float) -> Section:
+    """Στοιχείο 39: μόνο ύψος και βάρος· υπολογίζεται και στο Normal (Στοιχείο 46, Πίνακας 4)."""
+    from davinci import element_39 as e39
+    r = e39.compute(weight_kg, user, edema=m.leg_edema, amputation=m.amputation)
+    lines = [("HWR (ύψος / ∛βάρος)", _n(r.hwr, 2)), ("Εκτομορφία", _n(r.value))]
+    if r.scale:
+        lines.append(("Κλίμακα Heath-Carter", r.scale))
+    return Section("Εκτομορφία (Στοιχείο 39)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
 def guide_extra(field: str, sex: str) -> tuple[str, ...]:
     """Επιπλέον κείμενο στο ⓘ ανά φύλο (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
     from davinci import element_13 as e13
@@ -1146,6 +1264,8 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
                section_ankle_calf(m, user, w, f), section_thigh_knee(m, user, w, f),
                section_frame(m, user), section_knee_breadth(m, user, w), section_triceps(m, user),
                section_subscapular(m, user), section_supraspinale(m, user), section_calf_skinfold(m, user, w),
+               section_normal_tools(user), section_endomorphy(m, user), section_mesomorphy(m, user, w),
+               section_somatotype_normal(user), section_ectomorphy(m, user, w),
                section_visceral(m, user, w),
                section_muscle(m, user, w, f), section_water(m, user, w, f), section_hydration(m, user),
                section_bone(m, user, w, f), section_ratios(m, user, w, f, muscle, bone),

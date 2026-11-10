@@ -65,6 +65,7 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         bone = measure_input("Οστά %", "m_bone", "οστά % (ζυγαριά)", max_value=99.9)
         visceral = measure_input("Σπλαχνικό λίπος — μόνο αν το δείχνει η ζυγαριά σου (χωρίς μονάδα)", "m_visceral",
                                  "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0)
+        amputation = st.checkbox("Ακρωτηριασμός (αλλάζει το βάρος)", key="m_amputation")
 
     with st.expander("3. Περιφέρειες κορμού (μεζούρα)"):
         neck = measure_input("Λαιμός (cm)", "m_neck", "λαιμός")
@@ -105,7 +106,7 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
                     shoulders_cm=shoulders, arm_relaxed_cm=arm_rel, biceps_flexed_cm=biceps,
                     forearm_relaxed_cm=fore_rel, forearm_flexed_cm=fore_flx, wrist_cm=wrist, thigh_cm=thigh18,
                     knee_cm=knee, knee_swollen=swollen, calf_cm=calf, ankle_cm=ankle, leg_edema=edema,
-                    ankle_injured=injured, arm_injured=arm_injured, leg_injured=leg_injured, lipedema=lipedema,
+                    ankle_injured=injured, arm_injured=arm_injured, leg_injured=leg_injured, lipedema=lipedema, amputation=amputation,
                     **hydration, **medical)
 
     missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),
@@ -158,8 +159,9 @@ def skinfold_inputs(sex: str) -> dict:
     post = (st.checkbox("Πρώτες εβδομάδες μετά τον τοκετό", key="p_postpartum") if sex == "Γυναίκα" else False)
     sub = skinfold("Υποπλάτιος", "p_sub", "δερματοπτυχή υποπλάτιου", "Μέτρηση στην αριστερή πλευρά", "Οίδημα")
     st.caption(al.skinfold_notes()["35"])
-    site = st.radio("Μέτρησες την υπερακάνθια μπροστά, πάνω από τη λεκάνη;", ["Ναι", "Δεν ξέρω"], index=1,
-                    horizontal=True, key="p_sup_site")
+    site = st.radio("Μέτρησες την υπερακάνθια μπροστά, πάνω από τη λεκάνη;",
+                    ["Ναι", "Δεν ξέρω", "Όχι, στο πλάι (λαγόνια ακρολοφία)"], index=1, horizontal=True,
+                    key="p_sup_site")
     sup = skinfold("Υπερακάνθιος", "p_sup", "δερματοπτυχή υπερακάνθιου", "Μέτρηση στην αριστερή πλευρά", "Οίδημα")
     st.caption(al.skinfold_notes()["36"])
     calf = skinfold("Γάμπα (δερματοπτυχή)", "p_calf", "δερματοπτυχή γάμπας", "Μέτρηση στο αριστερό πόδι",
@@ -167,9 +169,12 @@ def skinfold_inputs(sex: str) -> dict:
     at_max = st.checkbox("Η δερματοπτυχή μετρήθηκε στο ύψος της μέγιστης περιφέρειας γάμπας", value=True,
                          key="p_calf_atmax")
     varicose = st.checkbox("Κιρσοί στη δεξιά γάμπα (μέτρηση στην αριστερή)", key="p_calf_varicose")
+    cmax = st.checkbox("Μία από τις πτυχές τρικεφάλου, υποπλάτιου ή υπερακάνθιου έφτασε το μέγιστο άνοιγμα της "
+                       "δαγκάνας", key="p_caliper_max")
     return dict(sf_isak=ISAK[isak], sf_caliper=caliper, triceps=tri, postpartum_recent=post, subscapular=sub,
                 supraspinale=sup, supraspinale_site_confirmed=True if site == "Ναι" else None, calf_skinfold=calf,
-                calf_skinfold_at_max_girth=at_max, calf_varicose=varicose)
+                calf_skinfold_at_max_girth=at_max, calf_varicose=varicose, supraspinale_is_iliac=site.startswith("Όχι"),
+                sf_caliper_max=cmax)
 
 
 def professional_inputs(sex: str, birth) -> dict:

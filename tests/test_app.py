@@ -260,8 +260,8 @@ class FakeSt:
         self.placeholders[label] = k.get("placeholder")
         return self.values.get(key, value)
 
-    def radio(self, label, options, key=None, **k):
-        return self.values.get(key, options[0])
+    def radio(self, label, options, key=None, index=0, **k):
+        return self.values.get(key, list(options)[index])
 
     def selectbox(self, label, options, key=None, index=0, **k):
         self.options[key] = list(options)
@@ -1416,3 +1416,98 @@ def test_screen_batch8(monkeypatch):
     assert e29.load_data()["messages"]["lipedema"] in f2.texts() and e26.load_data()["messages"]["injury"] in f2.texts()
     man = run_app(monkeypatch, {**vals, "sex": "Άνδρας", "m_lipedema": True})  # το πεδίο μόνο στις γυναίκες
     assert e29.load_data()["messages"]["lipedema"] not in man.texts()
+
+
+# ---- Δόση 9: Στοιχεία 30, 31, 32 (Professional) ----
+from davinci import element_30 as e30  # noqa: E402
+from davinci import element_31 as e31  # noqa: E402
+from davinci import element_32 as e32  # noqa: E402
+
+
+def test_e30_e32_document_table10():
+    m30, p = e30.load_data()["messages"], e32.load_data()["messages"]["P"]
+    s = sec(man139(**PRO), al.Measures(elbow_cm=7.4), "Σκελετός — εύρος αγκώνα")
+    assert s.lines == (("Εύρος αγκώνα", "7,4 cm"), ("Σκελετός", "Μεσαίος"),
+                       ("Όρια (NHANES III)", "Μικρός ≤ 6,9 · Μεσαίος · Μεγάλος ≥ 7,9 cm"))
+    assert s.messages == (p.replace("[κατηγορία]", "Μεσαίος"), m30["HP1"]) and s.indicative
+    t = sec(man139(**PRO), al.Measures(elbow_cm=7.0), "Σκελετός — εύρος αγκώνα")
+    assert dict(t.lines)["Σκελετός (Δαλματία)"] == "Μικρός"
+    assert t.messages[1:] == (m30["HP1"], m30["D"].replace("[κατηγορία]", "Μικρός"), m30["O"])
+    forty = sec(man139(birth_date=date(1985, 1, 1), **PRO), al.Measures(elbow_cm=7.4), "Σκελετός — εύρος αγκώνα")
+    assert dict(forty.lines)["Όρια (NHANES III)"] == "Μικρός ≤ 7,0 · Μεσαίος · Μεγάλος ≥ 7,9 cm"  # από τα 40
+    none = sec(man139(**PRO), al.Measures(), "Σκελετός — εύρος αγκώνα")
+    assert none.lines == (("Σκελετός", "Δεν έχει οριστεί"),) and none.messages == (m30["S"],) and not none.indicative
+
+
+def test_e30_cases_and_normal_level():
+    m30 = e30.load_data()["messages"]
+    w = sec(man37(sex="Γυναίκα", height_cm=165.0, ancestry="3a", birth_date=date(2007, 6, 1), **PRO),
+            al.Measures(elbow_cm=7.0, elbow_left_arm=True), "Σκελετός — εύρος αγκώνα")
+    assert dict(w.lines)["Σκελετός"] == "Μεγάλος" and "Σκελετός (Δαλματία)" not in dict(w.lines)
+    for k in ("HP2", "E", "Y", "A"):
+        assert m30[k] in w.messages, k
+    old = sec(man37(ancestry="2", birth_date=date(1940, 1, 1), weight_kg=80.0, fat_percent=20.0, **PRO),
+              al.Measures(elbow_cm=7.5), "Σκελετός — εύρος αγκώνα")
+    assert m30["X"] in old.messages and dict(old.lines)["Όρια (NHANES III)"] == "Μικρός ≤ 7,0 · Μεσαίος · Μεγάλος ≥ 7,9 cm"
+    cond = sec(man37(**PRO), al.Measures(elbow_cm=7.4, elbow_condition=True), "Σκελετός — εύρος αγκώνα")
+    assert cond.lines == (("Εύρος αγκώνα", "7,4 cm"), ("Σκελετός", "Δεν έχει οριστεί")) and cond.messages == (m30["T"],)
+    minor = sec(man37(birth_date=date(2012, 1, 1), **PRO), al.Measures(elbow_cm=6.0), "Σκελετός — εύρος αγκώνα")
+    assert minor.messages == (m30["R"],)
+    assert sec(man37(), al.Measures(elbow_cm=7.4), "Σκελετός — εύρος αγκώνα") is None  # Normal
+    assert sec(man37(), al.Measures(knee_breadths=(10.0, 10.1)), "Εύρος γονάτου") is None
+
+
+def test_e17_frame_from_elbow():
+    s17 = e32.load_data()["messages"]["S"]
+    w = sec(man37(**PRO), al.Measures(wrist_cm=18.6, elbow_cm=7.4), "Καρπός")
+    assert dict(w.lines)["Σκελετός"] == "Μεσαίος (από το εύρος αγκώνα, Στοιχείο 32)" and s17 not in w.messages
+    n = sec(man37(), al.Measures(wrist_cm=18.6, elbow_cm=7.4), "Καρπός")  # Normal: ο αγκώνας δεν μετράει
+    assert dict(n.lines)["Σκελετός"] == "Δεν έχει οριστεί" and s17 in n.messages
+    c = sec(man37(**PRO), al.Measures(wrist_cm=18.6, elbow_cm=7.4, elbow_condition=True), "Καρπός")
+    assert dict(c.lines)["Σκελετός"] == "Δεν έχει οριστεί"
+
+
+def test_e31_knee_breadth():
+    m31 = e31.load_data()["messages"]
+    s = sec(man139(**PRO), al.Measures(knee_breadths=(10.0, 10.1)), "Εύρος γονάτου")
+    assert s.lines == (("Μετρήσεις", "10,0 · 10,1 cm"), ("Τιμή για τη Μεσομορφία", "10,05 cm"),
+                       ("Ποιος μέτρησε · πλευρά", "Άλλο άτομο · δεξί πόδι"))
+    assert s.messages == (m31["normal"], m31["high_bmi"])
+    three = sec(man37(weight_kg=80.0, fat_percent=15.0, **PRO),
+                al.Measures(knee_breadths=(10.0, 10.5, 10.2), knee_measured_by="Ο ίδιος", knee_side="αριστερό",
+                            knee_breadth_edema=True), "Εύρος γονάτου")
+    assert dict(three.lines)["Τιμή για τη Μεσομορφία"] == "10,2 cm (αβέβαιη)"
+    assert dict(three.lines)["Ποιος μέτρησε · πλευρά"] == "Ο ίδιος · αριστερό πόδι"
+    assert three.messages == (m31["normal"], m31["self"], m31["edema"])
+    far = sec(man37(**PRO), al.Measures(knee_breadths=(10.0, 10.5)), "Εύρος γονάτου")
+    assert far.messages == (m31["third"],) and len(far.lines) == 1
+    one = sec(man37(**PRO), al.Measures(knee_breadths=(10.0,)), "Εύρος γονάτου")
+    assert one.lines == (("Μέτρηση", "10,0 cm"),) and one.warnings and one.warnings[0].startswith("Χρειάζονται δύο")
+    out = sec(man37(**PRO), al.Measures(knee_breadths=(1.0, 1.0)), "Εύρος γονάτου")
+    assert out.messages == (m31["out_of_range"],)
+    inj = sec(man37(**PRO), al.Measures(knee_breadths=(10.0, 10.0), knee_breadth_injured=True), "Εύρος γονάτου")
+    assert inj.messages == (m31["injury"],)
+    left = sec(man37(**PRO), al.Measures(knee_breadths=(10.0, 10.0), knee_breadth_injured=True, knee_side="αριστερό"),
+               "Εύρος γονάτου")
+    assert dict(left.lines)["Τιμή για τη Μεσομορφία"] == "10,0 cm (αβέβαιη)"
+    preg = sec(man37(sex="Γυναίκα", height_cm=165.0, pregnant=True, **PRO), al.Measures(knee_breadths=(9.0, 9.0)),
+               "Εύρος γονάτου")
+    assert m31["pregnancy"] in preg.messages
+    none = sec(man37(**PRO), al.Measures(), "Εύρος γονάτου")
+    assert none.lines == () and none.messages == (m31["not_measured"],)
+
+
+def test_screen_batch9(monkeypatch):
+    vals = {**WOMAN, "level": "Professional", "p_elbow": 6.5, "p_knee1": 9.0, "p_knee2": 9.1}
+    f = run_app(monkeypatch, vals)
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors and {"Σκελετός — εύρος αγκώνα (Στοιχεία 30, 32)", "Εύρος γονάτου (Στοιχείο 31)"} <= set(subs)
+    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    assert "**Σκελετός:** Μεσαίος" in md and "**Ποιος μέτρησε · πλευρά:** Άλλο άτομο · δεξί πόδι" in md
+    where = {label: g for g, label in f.inputs}
+    assert where["Εύρος αγκώνα (cm)"].startswith("6.") and where["Εύρος γονάτου — 1η μέτρηση (cm)"].startswith("6.")
+    assert "ⓘ " + e30.info()["info_title"] in f.expanders and "ⓘ " + e31.info()["info_title"] in f.expanders
+    f2 = run_app(monkeypatch, {**vals, "p_knee_by": "Ο ίδιος", "p_elbow_left": True})
+    assert e31.load_data()["messages"]["self"] in f2.texts() and e30.load_data()["messages"]["A"] in f2.texts()
+    normal = run_app(monkeypatch, {**WOMAN, "p_elbow": 6.5})
+    assert "Εύρος αγκώνα (cm)" not in {label for g, label in normal.inputs}

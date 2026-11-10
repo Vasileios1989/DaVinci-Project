@@ -124,11 +124,28 @@ def e46_levels() -> list[str]:
     return list(e46.levels())
 
 
+def e31_options() -> list[str]:
+    from davinci import element_31 as e31
+    return list(e31.load_data()["measured_by"])
+
+
 def professional_inputs(sex: str, birth) -> dict:
     """Κατηγορίες 6 και 7: μόνο στο επίπεδο Professional (Στοιχείο 46)."""
     with st.expander("6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)"):
-        st.caption("Εύρος αγκώνα, εύρος γονάτου και οι 4 δερματοπτυχές (τρικέφαλος, υποπλάτιος, υπερακάνθιος, γάμπα) "
-                   "μπαίνουν εδώ μαζί με τα αποτελέσματά τους, στις επόμενες δόσεις της εφαρμογής.")
+        st.caption("Οι 4 δερματοπτυχές (τρικέφαλος, υποπλάτιος, υπερακάνθιος, γάμπα) μπαίνουν εδώ στην επόμενη δόση.")
+        elbow = measure_input("Εύρος αγκώνα (cm)", "p_elbow", "εύρος αγκώνα")
+        elbow_left = st.checkbox("Μέτρηση στο αριστερό χέρι (το δεξί δεν μπορεί να μετρηθεί)", key="p_elbow_left")
+        elbow_cond = st.checkbox("Κάταγμα, φλεγμονή ή οίδημα στον αγκώνα", key="p_elbow_cond")
+        knee = [measure_input("Εύρος γονάτου — 1η μέτρηση (cm)", "p_knee1", "εύρος γονάτου"),
+                measure_input("Εύρος γονάτου — 2η μέτρηση (cm)", "p_knee2", None),
+                measure_input("Εύρος γονάτου — 3η μέτρηση, μόνο αν οι δύο διαφέρουν πάνω από 0,2 cm (cm)",
+                              "p_knee3", None)]
+        by = e31_options()
+        measured_by = st.radio("Ποιος μέτρησε το γόνατο", by, index=by.index("Άλλο άτομο"), horizontal=True,
+                               key="p_knee_by")
+        side = st.radio("Πόδι", ["δεξί", "αριστερό"], horizontal=True, key="p_knee_side")
+        knee_edema = st.checkbox("Πρήξιμο ή μώλωπας στο γόνατο", key="p_knee_edema")
+        knee_inj = st.checkbox("Τραυματισμός, πρόθεση ή αρθρίτιδα στο δεξί γόνατο", key="p_knee_inj")
     with st.expander("7. Ιατρικές εξετάσεις (προαιρετικά)"):
         st.caption(al.medical_message())
         ct = measure_input("Σπλαχνικό λίπος — αξονική ή μαγνητική τομογραφία (cm²)", "x_ct", None)
@@ -146,7 +163,9 @@ def professional_inputs(sex: str, birth) -> dict:
         if sex == "Γυναίκα":
             meno = st.selectbox("Έχεις περάσει την εμμηνόπαυση;", ["Ναι", "Όχι"], index=None, placeholder=OPTIONAL,
                                 key="x_meno")
-    return dict(ct_visceral_cm2=ct, visceral_volume=vol, medical_muscle_kg=mus, isotope_water_kg=wat,
+    return dict(elbow_cm=elbow, elbow_left_arm=elbow_left, elbow_condition=elbow_cond,
+                knee_breadths=tuple(x for x in knee if x is not None), knee_measured_by=measured_by, knee_side=side,
+                knee_breadth_edema=knee_edema, knee_breadth_injured=knee_inj, ct_visceral_cm2=ct, visceral_volume=vol, medical_muscle_kg=mus, isotope_water_kg=wat,
                 serum_osmolality=osm, osmolality_inputs=tuple(calc) if all(x is not None for x in calc) else None,
                 dxa_bone_kg=bone, t_score=t, z_score=z, menopause=None if meno is None else meno == "Ναι")
 

@@ -322,6 +322,15 @@ class Measures:
     arm_injured: bool = False  # τραυματισμός ή πρήξιμο στο δεξί χέρι ή στον καρπό (Στοιχεία 25, 27)
     leg_injured: bool = False  # τραυματισμός στο δεξί πόδι, μηρός ή γάμπα (Στοιχεία 26, 28)
     lipedema: bool = False  # δηλωμένη διάγνωση λιποιδήματος (Στοιχεία 28, 29)
+    # Professional, κατηγορία 6 (Στοιχεία 30–32)
+    elbow_cm: float | None = None
+    elbow_left_arm: bool = False  # το δεξί χέρι δεν μπορεί να μετρηθεί (γύψος, ακρωτηριασμός)
+    elbow_condition: bool = False  # κάταγμα, φλεγμονή ή οίδημα στον αγκώνα
+    knee_breadths: tuple[float, ...] = ()  # δύο μετρήσεις, ή τρεις όταν οι δύο διαφέρουν πάνω από 0,2 cm
+    knee_measured_by: str = "Άλλο άτομο"
+    knee_side: str = "δεξί"
+    knee_breadth_edema: bool = False  # πρήξιμο ή μώλωπας στο γόνατο
+    knee_breadth_injured: bool = False  # τραυματισμός, πρόθεση ή αρθρίτιδα στο δεξί γόνατο
 
 
 @dataclass(frozen=True)
@@ -691,15 +700,23 @@ def section_forearm(m: Measures, user: e01.UserCategories, weight_kg: float, fat
                    rel.indicative or flx.indicative)
 
 
+def _frame(m: Measures, user: e01.UserCategories):
+    """Στοιχείο 32: ο σκελετός μόνο από το εύρος αγκώνα (Στοιχείο 30)."""
+    from davinci import element_32 as e32
+    return e32.finalize(m.elbow_cm, user, left_arm=m.elbow_left_arm, elbow_condition=m.elbow_condition)
+
+
 def section_wrist(m: Measures, user: e01.UserCategories, weight_kg: float) -> Section | None:
-    """Στοιχείο 17: μόνο καταγραφή για τις αναλογίες· ο σκελετός ορίζεται μόνο από το εύρος αγκώνα (Στοιχείο 30)."""
+    """Στοιχείο 17: μόνο καταγραφή για τις αναλογίες· ο σκελετός ορίζεται μόνο από το εύρος αγκώνα (Στοιχεία 30, 32)."""
     from davinci import element_17 as e17
     if m.wrist_cm is None:
         return None
-    r = e17.assess(m.wrist_cm, weight_kg, user, elbow_breadth_measured=False)  # το 30 είναι Professional (Δόση 9)
+    frame = _frame(m, user)
+    defined = frame.frame != "Δεν έχει οριστεί"
+    r = e17.assess(m.wrist_cm, weight_kg, user, elbow_breadth_measured=defined)
     lines = _cm(m.wrist_cm)
     if not (e01.is_minor(user.age) or user.pregnant_or_breastfeeding):
-        lines.append(("Σκελετός", r.frame))
+        lines.append(("Σκελετός", f"{frame.frame} (από το εύρος αγκώνα, Στοιχείο 32)" if defined else r.frame))
     return Section("Καρπός (Στοιχείο 17)", tuple(lines), _dedupe(r.messages))
 
 
@@ -931,6 +948,47 @@ def section_thigh_knee(m: Measures, user: e01.UserCategories, weight_kg: float, 
                                user, _expected_ratio_rows("μηρός", "πάνω από το γόνατο"), field_note(29))
 
 
+def section_frame(m: Measures, user: e01.UserCategories) -> Section | None:
+    """Στοιχεία 30 και 32 (μόνο Professional): κατάταξη με το NHANES III και, για την ομάδα 1 18–74 ετών,
+    δεύτερη σύγκριση με τη Δαλματία (Πίνακες 3–7)· πάντα «Ενδεικτική», χωρίς χρώμα κινδύνου."""
+    from davinci import element_46 as e46
+    if not e46.element_available("30", user.level):
+        return None
+    r = _frame(m, user)
+    e = r.elbow
+    lines = [] if e.elbow_cm is None else [("Εύρος αγκώνα", f"{_n(e.elbow_cm)} cm")]
+    lines.append(("Σκελετός", r.frame))
+    if e.evaluated:
+        lo, hi = e.limits["small_le"], e.limits["large_ge"]
+        lines.append(("Όρια (NHANES III)", f"Μικρός ≤ {_n(lo)} · Μεσαίος · Μεγάλος ≥ {_n(hi)} cm"))
+        if e.frame_europe is not None and e.frame_europe != e.frame:
+            lines.append(("Σκελετός (Δαλματία)", e.frame_europe))
+    return Section("Σκελετός — εύρος αγκώνα (Στοιχεία 30, 32)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def section_knee_breadth(m: Measures, user: e01.UserCategories, weight_kg: float) -> Section | None:
+    """Στοιχείο 31 (μόνο Professional): καταγραφή για τη Μεσομορφία, χωρίς κατάταξη (Πίνακες 4–6)."""
+    from davinci import element_31 as e31
+    from davinci import element_46 as e46
+    if not e46.element_available("31", user.level):
+        return None
+    title = "Εύρος γονάτου (Στοιχείο 31)"
+    try:
+        r = e31.assess(list(m.knee_breadths), user, weight_kg, measured_by=m.knee_measured_by, side=m.knee_side,
+                       edema_or_bruise=m.knee_breadth_edema, injured_right=m.knee_breadth_injured)
+    except e01.InvalidInput as exc:  # π.χ. μία μόνο μέτρηση: μήνυμα στην ενότητα, όχι σφάλμα σε όλη τη σελίδα
+        return Section(title, tuple(("Μέτρηση", f"{_n(x)} cm") for x in m.knee_breadths), warnings=(str(exc),))
+    lines = []
+    if m.knee_breadths:
+        lines.append(("Μετρήσεις", " · ".join(_n(x) for x in m.knee_breadths) + " cm"))
+    if r.knee_breadth_cm is not None:
+        v = r.knee_breadth_cm
+        lines.append(("Τιμή για τη Μεσομορφία", f"{_n(v, 1 if round(v, 1) == v else 2)} cm"
+                      + (" (αβέβαιη)" if r.uncertain else "")))
+        lines.append(("Ποιος μέτρησε · πλευρά", f"{r.measured_by} · {r.side} πόδι"))
+    return Section(title, tuple(lines), _dedupe(r.messages))
+
+
 def guide_extra(field: str, sex: str) -> tuple[str, ...]:
     """Επιπλέον κείμενο στο ⓘ ανά φύλο (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
     from davinci import element_13 as e13
@@ -958,7 +1016,7 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
                section_shoulders_waist(m, user, w, f), section_forearm_biceps(m, user, w, f),
                section_thigh_calf(m, user, w, f), section_wrist_biceps(m, user, w, f),
                section_ankle_calf(m, user, w, f), section_thigh_knee(m, user, w, f),
-               section_visceral(m, user, w),
+               section_frame(m, user), section_knee_breadth(m, user, w), section_visceral(m, user, w),
                section_muscle(m, user, w, f), section_water(m, user, w, f), section_hydration(m, user),
                section_bone(m, user, w, f), section_ratios(m, user, w, f, muscle, bone),
                section_analysis(m, user, w, f, muscle, bone)]

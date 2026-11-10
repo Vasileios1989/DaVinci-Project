@@ -41,6 +41,7 @@ class PlanInput:
     pregnant: bool = False
     breastfeeding: bool = False
     pal: float = 1.4
+    level: str = "Normal"  # Στοιχείο 46
     aha_deficit: int | str | None = None  # 500 · 750 · «30%» (ΔΜΣ ≥ 25, απώλεια)
     rate_percent: float | None = None  # % του βάρους την εβδομάδα (ΔΜΣ < 25, απώλεια)
 
@@ -96,7 +97,7 @@ def _user(inp: PlanInput) -> e01.UserCategories:
         birth_date=inp.birth_date, measurement_date=inp.today, sex=inp.sex, height_cm=inp.height_cm,
         ancestry=inp.ancestry, mixed_chosen_group=inp.mixed_chosen_group, pregnant=inp.pregnant,
         breastfeeding=inp.breastfeeding, resistance_training=inp.resistance_training, profile=inp.profile,
-        level="Normal")
+        level=inp.level)
 
 
 def prepare(inp: PlanInput) -> Prep:
@@ -294,6 +295,17 @@ class Measures:
     hip_cm: float | None = None
     neck_cm: float | None = None
     chest_cm: float | None = None
+    # Ιατρικές εξετάσεις — μόνο Professional (Στοιχείο 46, Κανόνας 6)
+    ct_visceral_cm2: float | None = None
+    visceral_volume: float | None = None
+    medical_muscle_kg: float | None = None
+    isotope_water_kg: float | None = None
+    serum_osmolality: float | None = None
+    osmolality_inputs: tuple[float, float, float, float] | None = None  # Na, K, γλυκόζη, ουρία (mmol/L)
+    dxa_bone_kg: float | None = None
+    t_score: float | None = None
+    z_score: float | None = None
+    menopause: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -323,6 +335,12 @@ def _signed(x: float) -> str:
     return ("−" if x < 0 else "+") + _n(abs(x))
 
 
+def _two_values(*values) -> tuple[str, ...]:
+    """Στοιχείο 46, μήνυμα Ν4: δύο τιμές για το ίδιο μέγεθος → χρησιμοποιείται η πιο ακριβής."""
+    from davinci import element_46 as e46
+    return (e46.load_data()["messages"]["N4"],) if sum(v is not None for v in values) > 1 else ()
+
+
 def _dedupe(msgs) -> tuple[str, ...]:
     return tuple(dict.fromkeys(m for m in msgs if m))
 
@@ -349,12 +367,18 @@ def section_waist(m: Measures, user: e01.UserCategories, weight_kg: float) -> Se
 def section_visceral(m: Measures, user: e01.UserCategories, weight_kg: float) -> Section | None:
     """Στοιχείο 06 (Πίνακες 2, 5 · Κανόνες 1–4)."""
     from davinci import element_06 as e06
-    if m.waist_cm is None and m.upper_thigh_cm is None and m.scale_visceral_level is None:
+    if all(x is None for x in (m.waist_cm, m.upper_thigh_cm, m.scale_visceral_level, m.ct_visceral_cm2,
+                               m.visceral_volume)):
         return None
     r = e06.assess(user, weight_kg, waist_cm=m.waist_cm, upper_thigh_cm=m.upper_thigh_cm,
-                   scale_level=m.scale_visceral_level)
+                   scale_level=m.scale_visceral_level, ct_cm2=m.ct_visceral_cm2, volume_value=m.visceral_volume)
     lines: list[tuple[str, str]] = []
-    if r.source == e06.EQUATION:  # Κανόνας 3
+    if r.source == e06.CT:  # Κανόνας 1, προτεραιότητα 1
+        lines.append((f"Σπλαχνικό λίπος ({r.label}, τομογραφία)", f"{_n(r.value)} cm²"))
+        lines.append(("Ταξινόμηση", r.category))
+    elif r.source == e06.VOLUME:  # χωρίς όρια (Πίνακας 2)
+        lines.append((f"Σπλαχνικό λίπος ({r.label}, DXA ή μαγνητική)", f"{_n(r.value)} (μονάδα της γνωμάτευσης)"))
+    elif r.source == e06.EQUATION:  # Κανόνας 3
         lo, hi = r.range_cm2
         lines.append((f"Σπλαχνικό λίπος ({r.label})", f"≈ {_n(r.value, 0)} cm² (εύρος {_n(lo, 0)} – {_n(hi, 0)})"))
         lines.append(("Ταξινόμηση", r.category))
@@ -364,13 +388,16 @@ def section_visceral(m: Measures, user: e01.UserCategories, weight_kg: float) ->
         lines.append(("Τιμή ζυγαριάς (χωρίς μονάδα)", _n(r.scale_level)))
     if not lines and not r.messages:
         return None
-    return Section("Σπλαχνικό λίπος (Στοιχείο 06)", tuple(lines), _dedupe(r.messages), r.indicative)
+    equation = m.waist_cm if m.upper_thigh_cm is not None else None
+    n4 = _two_values(m.ct_visceral_cm2 or m.visceral_volume, equation, m.scale_visceral_level)
+    return Section("Σπλαχνικό λίπος (Στοιχείο 06)", tuple(lines), _dedupe([*r.messages, *n4]), r.indicative)
 
 
 def section_muscle(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section:
     """Στοιχείο 07 (Πίνακας 3 · Κανόνες 1–7 · Συμπλήρωμα Α)· στόχος μόνο όταν το Στοιχείο 03 δίνει άλιπη-στόχο."""
     from davinci import element_07 as e07
-    r = e07.assess(weight_kg, fat_percent, user, scale_percent=m.scale_muscle_percent)
+    r = e07.assess(weight_kg, fat_percent, user, scale_percent=m.scale_muscle_percent,
+                   medical_kg=m.medical_muscle_kg)
     if r.muscle_kg is None:
         return Section("Σκελετικοί μύες (Στοιχείο 07)", (), _dedupe(r.messages), r.indicative)
     lines = [("Σκελετικοί μύες", f"{_n(r.muscle_kg)} kg ({r.source})"),
@@ -382,7 +409,7 @@ def section_muscle(m: Measures, user: e01.UserCategories, weight_kg: float, fat_
     if r.dry_muscle_kg is not None:
         lo, hi = r.dry_muscle_range_kg
         lines.append(("Ξηροί μύες (εκτίμηση)", f"≈ {_n(r.dry_muscle_kg)} kg (εύρος {_n(lo)} – {_n(hi)})"))
-    msgs = list(r.messages)
+    msgs = [*r.messages, *_two_values(m.medical_muscle_kg, m.scale_muscle_percent)]
     # Το Στοιχείο 03 δεν δίνει στόχο σε ανηλίκους, εγκυμοσύνη/θηλασμό ή λίπος μέσα στο εύρος (Κανόνας 8).
     wt = e03.weight_target(weight_kg, fat_percent, user)
     if wt.status == "υπολογίστηκε":  # Κανόνας 5 με την άλιπη-στόχο της Φάσης 1
@@ -426,13 +453,14 @@ def section_ffmi(user: e01.UserCategories, weight_kg: float, fat_percent: float)
 def section_water(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section:
     """Στοιχείο 08, Μέρος Α (Πίνακες 3, 5 · Κανόνες 1–3, 6–8)."""
     from davinci import element_08 as e08
-    r = e08.assess_water(weight_kg, fat_percent, user, scale_percent=m.scale_water_percent)
+    r = e08.assess_water(weight_kg, fat_percent, user, scale_percent=m.scale_water_percent,
+                         medical_kg=m.isotope_water_kg)
     lines = [("Υγρά", f"{_n(r.water_kg)} kg ({r.source})"),
              ("Αναλογία νερού / άλιπη μάζα", _n(r.ratio, 3) + (f" — {r.ratio_label}" if r.ratio_label else "")),
              ("% του βάρους (πληροφορία)", f"{_n(r.pct_of_weight)}%")]
     if r.out_of_reference_label:
         lines.append(("Ηλικία", r.out_of_reference_label))
-    msgs = list(r.messages)
+    msgs = [*r.messages, *_two_values(m.isotope_water_kg, m.scale_water_percent)]
     pts = _targets(weight_kg, fat_percent, user)
     if pts:  # Κανόνας 7
         ts = [e08.water_target(p.ffm_kg) for p in pts]
@@ -446,9 +474,18 @@ def section_hydration(m: Measures, user: e01.UserCategories) -> Section:
     from davinci import element_08 as e08
     r = e08.assess_hydration(user, previous_morning_weights=m.previous_morning_weights,
                              today_morning_weight=m.today_morning_weight, urine_color=m.urine_color,
-                             thirst=m.thirst)
+                             thirst=m.thirst, serum_osmolality=m.serum_osmolality,
+                             calc_osmolality_inputs=m.osmolality_inputs)
     lines = []
-    if r.result is not None:
+    if r.method == "εξέταση αίματος":  # Πίνακας 9
+        b = e08.load_data()["blood"]
+        if m.serum_osmolality is not None:
+            lines.append(("Ωσμωτικότητα ορού (μετρημένη)", f"{_n(m.serum_osmolality)} mOsm/kg · όριο > {b['measured_gt']}"))
+        else:
+            calc = e08.calculated_osmolality(*m.osmolality_inputs)
+            lines.append(("Υπολογισμένη ωσμωτικότητα", f"{_n(calc)} mmol/L · όριο > {b['calculated_gt']}"))
+        lines.append(("Ενυδάτωση (εξέταση αίματος)", r.result or "κάτω από το όριο"))
+    elif r.result is not None:
         lines.append((f"Ενυδάτωση ({r.method})", r.result))
         lines.append(("Θετικές ενδείξεις", f"{r.positives} από {len(r.evaluated)} ({', '.join(r.evaluated)})"))
     return Section("Ενυδάτωση (Στοιχείο 08)", tuple(lines), _dedupe(r.messages), r.indicative)
@@ -459,7 +496,8 @@ def _bone(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: 
     # Κανόνας 8· το μήνυμα αφορά μόνο ενήλικες εκτός εγκυμοσύνης/θηλασμού (Κανόνας 9), όπου υπάρχει εύρος λίπους
     losing = (not (e01.is_minor(user.age) or user.pregnant_or_breastfeeding)
               and e42.direction(fat_percent, user).direction == "loss")
-    return e09.assess_bone(weight_kg, fat_percent, user, scale_percent=m.scale_bone_percent, losing_weight=losing)
+    return e09.assess_bone(weight_kg, fat_percent, user, scale_percent=m.scale_bone_percent, dxa_kg=m.dxa_bone_kg,
+                           losing_weight=losing)
 
 
 def section_bone(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section:
@@ -468,8 +506,11 @@ def section_bone(m: Measures, user: e01.UserCategories, weight_kg: float, fat_pe
     r = _bone(m, user, weight_kg, fat_percent)
     lines = [("Οστικά μέταλλα", f"{'≈ ' if r.typical else ''}{_n(r.bone_kg)} kg" + (f" ({r.label})" if r.label else "")),
              ("% της άλιπης μάζας", f"{_n(r.pct_of_ffm)}%"), ("% του βάρους (πληροφορία)", f"{_n(r.pct_of_weight)}%")]
-    h = e09.assess_health(user)
-    return Section("Οστά (Στοιχείο 09)", tuple(lines), _dedupe([*r.messages, *h.messages]))
+    h = e09.assess_health(user, t_score=m.t_score, z_score=m.z_score, menopause=m.menopause)
+    if h.category:  # Πίνακες 7, 8: μόνο από DXA
+        lines.append((f"Υγεία οστών ({h.index}, DXA)", h.category))
+    n4 = _two_values(m.dxa_bone_kg, m.scale_bone_percent)
+    return Section("Οστά (Στοιχείο 09)", tuple(lines), _dedupe([*r.messages, *n4, *h.messages]))
 
 
 def section_ratios(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float,
@@ -497,7 +538,8 @@ def section_analysis(m: Measures, user: e01.UserCategories, weight_kg: float, fa
                      muscle_kg: float | None, bone) -> Section:
     """Στοιχείο 03, Συμπληρώματα Β και Γ: ανάλυση της άλιπης μάζας σε δύο τρόπους (Α υλικό, Β ιστοί).
     Νερό μόνο από τη ζυγαριά (το «0,73 × άλιπη» θα έδινε κυκλικό αποτέλεσμα, Πίνακας Γ4)."""
-    water = None if m.scale_water_percent is None else e03.scale_kg(weight_kg, m.scale_water_percent)
+    water = m.isotope_water_kg if m.isotope_water_kg is not None else (
+        None if m.scale_water_percent is None else e03.scale_kg(weight_kg, m.scale_water_percent))
     # Το μήνυμα του 09 για την τυπική τιμή οστών (Πίνακας Γ4) εμφανίζεται ήδη στην ενότητα «Οστά».
     a = e03.analysis(weight_kg, fat_percent, user, water_kg=water, bone_kg=bone.bone_kg, muscle_kg=muscle_kg,
                      bone_typical=bone.typical)
@@ -581,7 +623,7 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
     try:
         user = _user(inp)
         w, f = inp.weight_kg, inp.fat_percent
-        muscle = e07.assess(w, f, user, scale_percent=m.scale_muscle_percent).muscle_kg
+        muscle = e07.assess(w, f, user, scale_percent=m.scale_muscle_percent, medical_kg=m.medical_muscle_kg).muscle_kg
         bone = _bone(m, user, w, f)
         out = [section_ffmi(user, w, f), section_waist(m, user, w), section_hip(m, user, w, f),
                section_neck(m, user, f), section_chest(m, user, w, f), section_visceral(m, user, w),
@@ -599,3 +641,23 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
         seen.update(fresh)
         result.append(Section(sec.title, sec.lines, fresh, sec.indicative, sec.table, sec.warnings))
     return tuple(result), ()
+
+
+def level_info(level: str) -> tuple[str, ...]:
+    """Στοιχείο 46: όργανα του επιπέδου (Πίνακας 1) και, στο Professional, το μήνυμα Ν3."""
+    from davinci import element_46 as e46
+    d = e46.load_data()
+    out = ["Όργανα: " + ", ".join(d["tools"][level]) + "."]
+    if level == "Professional":
+        out.append(d["messages"]["N3"])
+    return tuple(out)
+
+
+def medical_message() -> str:
+    from davinci import element_46 as e46
+    return e46.medical_entry_message()
+
+
+def calipers() -> tuple[str, ...]:
+    from davinci import element_33 as e33
+    return tuple(e33.load_data()["calipers"])

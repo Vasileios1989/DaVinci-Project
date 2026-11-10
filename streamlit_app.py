@@ -34,7 +34,10 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         birth = st.date_input("Ημερομηνία γέννησης", value=None, min_value=date(1900, 1, 1), max_value=TODAY,
                               format="DD/MM/YYYY", key="birth")
         sex = st.radio("Φύλο", e01.load_data()["sexes"], horizontal=True, key="sex")
-        height = measure_input("Ύψος (cm)", "height", "ύψος", min_value=90.0, max_value=230.0)
+        level = st.radio("Επίπεδο μέτρησης", e46_levels(), horizontal=True, key="level")
+        for x in al.level_info(level):
+            st.caption(x)
+        height = measure_input("Ύψος (cm)", "height", "ύψος", min_value=90.0, max_value=230.0, optional=False)
         groups = {g["code"]: g["name"] for g in e01.load_data()["ancestry_groups"]}
         ancestry = st.selectbox("Καταγωγή", [None, *groups], format_func=lambda c: "Δεν δηλώνω" if c is None else groups[c],
                                 key="ancestry")
@@ -55,12 +58,12 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
                            format_func=lambda k: f"{k.replace('.', ',')} — {pals[k]}", key="pal")
 
     with st.expander("2. Σύσταση σώματος (ζυγαριά)", expanded=True):
-        weight = measure_input("Βάρος (kg)", "weight", "βάρος")
-        fat = measure_input("Λίπος %", "fat", "λίπος % (ζυγαριά)", max_value=99.9)
+        weight = measure_input("Βάρος (kg)", "weight", "βάρος", optional=False)
+        fat = measure_input("Λίπος %", "fat", "λίπος % (ζυγαριά)", max_value=99.9, optional=False)
         muscle = measure_input("Μύες %", "m_muscle", "μύες % (ζυγαριά)", max_value=99.9)
         water = measure_input("Υγρά %", "m_water", "υγρά % (ζυγαριά)", max_value=99.9)
         bone = measure_input("Οστά %", "m_bone", "οστά % (ζυγαριά)", max_value=99.9)
-        visceral = measure_input("Σπλαχνικό λίπος (τιμή ζυγαριάς, χωρίς μονάδα)", "m_visceral",
+        visceral = measure_input("Σπλαχνικό λίπος — μόνο αν το δείχνει η ζυγαριά σου (χωρίς μονάδα)", "m_visceral",
                                  "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0)
 
     with st.expander("3. Περιφέρειες κορμού (μεζούρα)"):
@@ -72,9 +75,11 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
     with st.expander("4. Περιφέρειες άκρων (μεζούρα)"):
         thigh = measure_input("Άνω μηρός (cm)", "m_thigh", "άνω μηρός")
 
+    hydration = hydration_inputs()
+    medical = professional_inputs(sex, birth) if level == "Professional" else {}
     m = al.Measures(waist_cm=waist, upper_thigh_cm=thigh, scale_visceral_level=visceral, scale_muscle_percent=muscle,
                     scale_water_percent=water, scale_bone_percent=bone, hip_cm=hip, neck_cm=neck, chest_cm=chest,
-                    **hydration_inputs())
+                    **hydration, **medical)
 
     missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),
                               ("επίπεδο δραστηριότητας", pal)) if v is None]
@@ -83,8 +88,40 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         return None, m
     inp = al.PlanInput(birth_date=birth, sex=sex, height_cm=height, weight_kg=weight, fat_percent=fat, today=TODAY,
                        ancestry=ancestry, mixed_chosen_group=mixed, profile=profile, resistance_training=training,
-                       pregnant=pregnant, breastfeeding=breastfeeding, pal=float(pal))
+                       pregnant=pregnant, breastfeeding=breastfeeding, pal=float(pal), level=level)
     return inp, m
+
+
+def e46_levels() -> list[str]:
+    from davinci import element_46 as e46
+    return list(e46.levels())
+
+
+def professional_inputs(sex: str, birth) -> dict:
+    """Κατηγορίες 6 και 7: μόνο στο επίπεδο Professional (Στοιχείο 46)."""
+    with st.expander("6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)"):
+        st.caption("Εύρος αγκώνα, εύρος γονάτου και οι 4 δερματοπτυχές (τρικέφαλος, υποπλάτιος, υπερακάνθιος, γάμπα) "
+                   "μπαίνουν εδώ μαζί με τα αποτελέσματά τους, στις επόμενες δόσεις της εφαρμογής.")
+    with st.expander("7. Ιατρικές εξετάσεις (προαιρετικά)"):
+        st.caption(al.medical_message())
+        ct = measure_input("Σπλαχνικό λίπος — αξονική ή μαγνητική τομογραφία (cm²)", "x_ct", None)
+        vol = measure_input("Σπλαχνικό λίπος — DXA ή μαγνητική: όγκος ή μάζα (μονάδα της γνωμάτευσης)", "x_vol", None)
+        mus = measure_input("Σκελετικοί μύες — ιατρική μέτρηση (kg)", "x_muscle", None)
+        wat = measure_input("Υγρά — αραίωση ισοτόπων (kg)", "x_water", None)
+        osm = measure_input("Ωσμωτικότητα ορού, μετρημένη (mOsm/kg)", "x_osm", None)
+        st.caption("Αν δεν υπάρχει μετρημένη ωσμωτικότητα: Na, K, γλυκόζη και ουρία (mmol/L), για υπολογισμό.")
+        calc = [measure_input(n + " (mmol/L)", "x_" + k, None) for n, k in
+                (("Νάτριο (Na)", "na"), ("Κάλιο (K)", "k"), ("Γλυκόζη", "glu"), ("Ουρία", "urea"))]
+        bone = measure_input("Οστικά μέταλλα — DXA (kg)", "x_bone", None)
+        t = measure_input("T-score (DXA)", "x_t", None, min_value=None)
+        z = measure_input("Z-score (DXA)", "x_z", None, min_value=None)
+        meno = None
+        if sex == "Γυναίκα":
+            meno = st.selectbox("Έχεις περάσει την εμμηνόπαυση;", ["Ναι", "Όχι"], index=None, placeholder=OPTIONAL,
+                                key="x_meno")
+    return dict(ct_visceral_cm2=ct, visceral_volume=vol, medical_muscle_kg=mus, isotope_water_kg=wat,
+                serum_osmolality=osm, osmolality_inputs=tuple(calc) if all(x is not None for x in calc) else None,
+                dxa_bone_kg=bone, t_score=t, z_score=z, menopause=None if meno is None else meno == "Ναι")
 
 
 # ------------------------------------------------------------------ πλάνο
@@ -214,7 +251,9 @@ def tab_card(inp: al.PlanInput) -> None:
 
 
 # ------------------------------------------------------------------ μετρήσεις (Στοιχεία 05–39, σε δόσεις)
-def guide_box(field: str, extra: tuple[str, ...] = ()) -> None:
+def guide_box(field: str | None, extra: tuple[str, ...] = ()) -> None:
+    if field is None:
+        return
     g = measurement.guide(field)
     if g is None:
         return
@@ -225,9 +264,14 @@ def guide_box(field: str, extra: tuple[str, ...] = ()) -> None:
             st.info(x)
 
 
-def measure_input(label: str, key: str, field: str, *, min_value: float = 0.1, max_value: float | None = None,
-                  extra: tuple[str, ...] = ()):
-    v = st.number_input(label, min_value=min_value, max_value=max_value, value=None, step=0.1, format="%.1f", key=key)
+OPTIONAL = "Προαιρετικό"
+
+
+def measure_input(label: str, key: str, field: str | None, *, min_value: float | None = 0.1,
+                  max_value: float | None = None, extra: tuple[str, ...] = (), optional: bool = True):
+    """Τα προαιρετικά πεδία δείχνουν αχνό «Προαιρετικό» μέσα στο κουτί, που χάνεται όταν γράψεις τιμή."""
+    v = st.number_input(label, min_value=min_value, max_value=max_value, value=None, step=0.1, format="%.1f", key=key,
+                        placeholder=OPTIONAL if optional else None)
     guide_box(field, extra)
     return v
 
@@ -251,14 +295,12 @@ def hydration_inputs() -> dict:
     """Στοιχείο 08, Πίνακας 7: καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό."""
     with st.expander("5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"):
         st.caption("Καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό.")
-        prev = [st.number_input(f"Πρωινό βάρος πριν από {d} {'ημέρα' if d == 1 else 'ημέρες'} (kg)", min_value=0.1,
-                                value=None, step=0.1, format="%.1f", key=f"m_prev{d}") for d in (3, 2, 1)]
-        today = st.number_input("Πρωινό βάρος σήμερα (kg)", min_value=0.1, value=None, step=0.1, format="%.1f",
-                                key="m_today")
-        urine = st.selectbox("Χρώμα πρώτων πρωινών ούρων (κλίμακα 1–8)", [None, *range(1, 9)], key="m_urine",
-                             format_func=lambda x: "Δεν καταγράφηκε" if x is None else str(x))
-        thirst = st.number_input("Δίψα (βαθμός στην κλίμακα)", min_value=0.0, value=None, step=1.0, format="%.0f",
-                                 key="m_thirst")
+        prev = [measure_input(f"Πρωινό βάρος πριν από {d} {'ημέρα' if d == 1 else 'ημέρες'} (kg)", f"m_prev{d}", None)
+                for d in (3, 2, 1)]
+        today = measure_input("Πρωινό βάρος σήμερα (kg)", "m_today", None)
+        urine = st.selectbox("Χρώμα πρώτων πρωινών ούρων (κλίμακα 1–8)", list(range(1, 9)), index=None,
+                             placeholder=OPTIONAL, key="m_urine")
+        thirst = measure_input("Δίψα (βαθμός στην κλίμακα)", "m_thirst", None, min_value=0.0)
     return dict(previous_morning_weights=tuple(x for x in prev if x is not None), today_morning_weight=today,
                 urine_color=urine, thirst=thirst)
 

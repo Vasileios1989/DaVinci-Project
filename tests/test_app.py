@@ -236,7 +236,7 @@ class FakeSt:
 
     def __init__(self, values):
         self.values, self.shown, self.errors = values, [], []
-        self.inputs, self.expanders, self.group, self.options = [], [], None, {}
+        self.inputs, self.expanders, self.group, self.options, self.placeholders = [], [], None, {}, {}
         self.column_config = types.SimpleNamespace(**{n: (lambda *a, **k: {"col": n}) for n in
                                                       ("DateColumn", "NumberColumn", "TextColumn", "CheckboxColumn")})
 
@@ -256,6 +256,7 @@ class FakeSt:
 
     def number_input(self, label, key=None, value=None, **k):
         self.inputs.append((self.group, label))
+        self.placeholders[label] = k.get("placeholder")
         return self.values.get(key, value)
 
     def radio(self, label, options, key=None, **k):
@@ -817,3 +818,126 @@ def test_screen_missing_birth_and_profiles_by_age(monkeypatch):
     assert f.options["profile"] == ["Υγεία", "Αθλητικό", "Bodybuilding"]
     minor = run_app(monkeypatch, {"birth": date(2012, 1, 1)})
     assert minor.options["profile"] == ["Υγεία"]
+
+
+
+# ================================================================ Normal / Professional (Στοιχείο 46) και «Προαιρετικό»
+from davinci import element_06 as e06m  # noqa: E402
+from davinci import element_46 as e46  # noqa: E402
+
+PRO = dict(level="Professional")
+
+
+def test_required_fields_have_no_placeholder_optional_do(monkeypatch):
+    f = run_app(monkeypatch, {})
+    ph = f.placeholders
+    assert ph["Ύψος (cm)"] is None and ph["Βάρος (kg)"] is None and ph["Λίπος %"] is None
+    for label in ("Μύες %", "Υγρά %", "Οστά %", "Μέση (cm)", "Άνω μηρός (cm)", "Πρωινό βάρος σήμερα (kg)",
+                  "Σπλαχνικό λίπος — μόνο αν το δείχνει η ζυγαριά σου (χωρίς μονάδα)"):
+        assert ph[label] == "Προαιρετικό"
+
+
+def test_normal_hides_professional_categories(monkeypatch):
+    f = run_app(monkeypatch, dict(WOMAN))
+    assert not any(e.startswith(("6.", "7.")) for e in f.expanders)
+    assert any(t.startswith("Όργανα: ") and "Δερματοπτυχόμετρο" not in t for t in f.texts())
+    p = run_app(monkeypatch, {**WOMAN, "level": "Professional", "x_meno": "Ναι"})
+    assert [e for e in p.expanders if e.startswith(("6.", "7."))] == [
+        "6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)", "7. Ιατρικές εξετάσεις (προαιρετικά)"]
+    assert e46.load_data()["messages"]["N3"] in p.texts() and e46.medical_entry_message() in p.texts()
+    assert p.options["x_meno"] == ["Ναι", "Όχι"] and not p.errors
+
+
+def test_normal_rejects_medical_values():
+    secs, errs = al.measurement_sections(man37(), al.Measures(medical_muscle_kg=40.0))
+    assert secs == () and errs and "Professional" in errs[0]
+
+
+def test_pro_visceral_ct_and_volume_and_n4():
+    n4 = e46.load_data()["messages"]["N4"]
+    s = sec(man37(**PRO), al.Measures(ct_visceral_cm2=120.0, waist_cm=146.0, upper_thigh_cm=70.0), "Σπλαχνικό")
+    assert s.lines[:2] == (("Σπλαχνικό λίπος (Μέτρηση, τομογραφία)", "120,0 cm²"), ("Ταξινόμηση", "Αυξημένος κίνδυνος"))
+    assert n4 in s.messages
+    v = sec(man37(**PRO), al.Measures(visceral_volume=1500.0), "Σπλαχνικό")
+    assert v.lines == (("Σπλαχνικό λίπος (Μέτρηση, DXA ή μαγνητική)", "1.500,0 (μονάδα της γνωμάτευσης)"),)
+    assert e06m.load_data()["messages"]["volume"] in v.messages and n4 not in v.messages
+    one = sec(man37(**PRO), al.Measures(ct_visceral_cm2=80.0), "Σπλαχνικό")
+    assert n4 not in one.messages and one.lines[1] == ("Ταξινόμηση", "Κάτω από το όριο κινδύνου")
+
+
+def test_pro_muscle_water_bone_medical_with_n4():
+    n4 = e46.load_data()["messages"]["N4"]
+    m = al.Measures(medical_muscle_kg=40.0, scale_muscle_percent=30.0, isotope_water_kg=57.0, scale_water_percent=39.2,
+                    dxa_bone_kg=3.4, scale_bone_percent=1.9)
+    secs, errs = al.measurement_sections(man139(**PRO), m)
+    assert errs == ()
+    get = {x.title.split(" (")[0]: x for x in secs}
+    assert dict(get["Σκελετικοί μύες"].lines)["Σκελετικοί μύες"] == "40,0 kg (ιατρική μέτρηση)"
+    assert dict(get["Υγρά"].lines)["Υγρά"] == "57,0 kg (ιατρική μέτρηση)"
+    assert dict(get["Οστά"].lines)["Οστικά μέταλλα"] == "3,4 kg"
+    assert n4 in get["Σκελετικοί μύες"].messages  # εμφανίζεται μία φορά (αφαίρεση διπλών)
+    rows = {r[0]: r[1] for r in get["Ανάλυση άλιπης μάζας"].table}
+    assert rows["Νερό (υγρά)"] == "57,0" and rows["Οστικά μέταλλα"] == "3,4" and rows["Σκελετικοί μύες"] == "40,0"
+    assert dict(get["Λόγοι άλιπης / λίπους και μυών / λίπους"].lines)["Σύγκριση με το όριο (χωρίς οστά)"] == \
+        _n2((79.4261 - 3.4) / (139.1 - 79.4261))
+
+
+def _n2(x):
+    from davinci.fmt import num
+    return num(x, 2)
+
+
+def test_pro_bone_health_dxa():
+    m9 = e09.load_data()["messages"]
+    man = sec(man37(**PRO), al.Measures(t_score=-2.7), "Οστά")  # άνδρας 37: Z-score (Πίνακας 6)
+    assert "Υγεία οστών (Z-score, DXA)" not in dict(man.lines)
+    z = sec(man37(**PRO), al.Measures(z_score=-2.3), "Οστά")
+    assert dict(z.lines)["Υγεία οστών (Z-score, DXA)"] == "Κάτω από το αναμενόμενο για την ηλικία"
+    w = sec(man37(sex="Γυναίκα", weight_kg=70.0, fat_percent=30.0, **PRO),
+            al.Measures(t_score=-2.7, menopause=True), "Οστά")
+    assert dict(w.lines)["Υγεία οστών (T-score, DXA)"] == "Οστεοπόρωση (κατά την πυκνότητα)"
+    nm = sec(man37(sex="Γυναίκα", weight_kg=70.0, fat_percent=30.0, **PRO), al.Measures(t_score=-1.5), "Οστά")
+    assert m9["menopause_missing"] in nm.messages and dict(nm.lines)["Υγεία οστών (T-score, DXA)"].startswith("Χαμηλή")
+
+
+def test_pro_hydration_blood():
+    old = dict(birth_date=date(1950, 1, 1), **PRO)
+    s = sec(man37(**old), al.Measures(serum_osmolality=305.0), "Ενυδάτωση")
+    assert s.lines == (("Ωσμωτικότητα ορού (μετρημένη)", "305,0 mOsm/kg · όριο > 300"),
+                       ("Ενυδάτωση (εξέταση αίματος)", "Αφυδάτωση από χαμηλή πρόσληψη υγρών"))
+    ok = sec(man37(**old), al.Measures(serum_osmolality=290.0), "Ενυδάτωση")
+    assert ok.lines[1] == ("Ενυδάτωση (εξέταση αίματος)", "κάτω από το όριο")
+    from davinci.fmt import num
+    low = sec(man37(**old), al.Measures(osmolality_inputs=(140.0, 4.0, 5.0, 6.0)), "Ενυδάτωση")
+    assert low.lines == (("Υπολογισμένη ωσμωτικότητα", f"{num(1.86 * 144 + 1.15 * 5 + 6 + 14)} mmol/L · όριο > 295"),
+                         ("Ενυδάτωση (εξέταση αίματος)", "κάτω από το όριο"))  # 293,6
+    high = sec(man37(**old), al.Measures(osmolality_inputs=(145.0, 4.0, 5.0, 6.0)), "Ενυδάτωση")
+    assert high.lines == (("Υπολογισμένη ωσμωτικότητα", "302,9 mmol/L · όριο > 295"),
+                          ("Ενυδάτωση (εξέταση αίματος)", "Ένδειξη για έλεγχο από γιατρό"))
+
+
+def test_screen_professional_values_reach_results(monkeypatch):
+    vals = {**WOMAN, "level": "Professional", "x_muscle": 25.0, "x_na": 140.0, "x_k": 4.0, "x_glu": 5.0}
+    f = run_app(monkeypatch, vals)
+    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    assert "**Σκελετικοί μύες:** 25,0 kg (ιατρική μέτρηση)" in md and not f.errors
+    assert not any(x.startswith("**Υπολογισμένη ωσμωτικότητα") for x in md)  # λείπει η ουρία
+    g = run_app(monkeypatch, {**vals, "x_urea": 6.0, "birth": date(1950, 1, 1)})
+    assert any(x.startswith("**Υπολογισμένη ωσμωτικότητα:**") for x in
+               [a[0] for n, a, k in g.shown if n == "markdown"])
+
+
+def test_pro_n4_needs_two_real_sources_and_menopause_choice(monkeypatch):
+    n4 = e46.load_data()["messages"]["N4"]
+    s = sec(man37(**PRO), al.Measures(ct_visceral_cm2=120.0, waist_cm=146.0), "Σπλαχνικό")  # χωρίς άνω μηρό
+    assert n4 not in s.messages
+    w = dict(sex="Γυναίκα", weight_kg=70.0, fat_percent=30.0, **PRO)
+    pre = sec(man37(**w), al.Measures(t_score=-2.7, menopause=False), "Οστά")  # πριν την εμμηνόπαυση: Z-score
+    assert not any(k.startswith("Υγεία οστών") for k, _ in pre.lines)
+    vals = {**WOMAN, "level": "Professional", "x_t": -2.7}
+    yes = run_app(monkeypatch, {**vals, "x_meno": "Ναι"})
+    no = run_app(monkeypatch, {**vals, "x_meno": "Όχι"})
+    md_yes = [a[0] for n, a, k in yes.shown if n == "markdown"]
+    md_no = [a[0] for n, a, k in no.shown if n == "markdown"]
+    assert "**Υγεία οστών (T-score, DXA):** Οστεοπόρωση (κατά την πυκνότητα)" in md_yes
+    assert not any(x.startswith("**Υγεία οστών") for x in md_no)

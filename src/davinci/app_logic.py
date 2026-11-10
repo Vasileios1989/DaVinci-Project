@@ -315,6 +315,10 @@ class Measures:
     thigh_cm: float | None = None  # 1 cm κάτω από τη γλουτιαία πτυχή (Στοιχείο 18)· όχι ο «άνω μηρός» του 06
     knee_cm: float | None = None  # πάνω από το γόνατο (Στοιχείο 19)
     knee_swollen: bool = False
+    calf_cm: float | None = None
+    ankle_cm: float | None = None
+    leg_edema: bool = False  # πρήξιμο (οίδημα) στα πόδια ή στον αστράγαλο (Στοιχεία 20, 21)
+    ankle_injured: bool = False
 
 
 @dataclass(frozen=True)
@@ -730,6 +734,56 @@ def section_knee(m: Measures, user: e01.UserCategories, weight_kg: float, fat_pe
     return Section("Πάνω από το γόνατο (Στοιχείο 19)", tuple(lines), _dedupe(r.messages), r.indicative)
 
 
+def section_calf(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 20: όριο με διόρθωση ΔΜΣ ανά καταγωγή (Πίνακες 3–4) και εκτίμηση ANSUR II·
+    Αθλητικό / Bodybuilding: ≥ max(εκτίμηση, τιμή για «φυσιολογική» στο βάρος-στόχο)."""
+    from davinci import element_20 as e20
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e20.assess(m.calf_cm, weight_kg, user, [p.weight_kg for p in pts], edema=m.leg_edema)
+    if m.calf_cm is None and not r.estimates:
+        return None
+    lines = _cm(m.calf_cm)
+    if r.corrected_cm is not None:
+        lines.append(("Διορθωμένη για τον ΔΜΣ", f"{_n(r.corrected_cm)} cm"))
+        lines.append(("Ταξινόμηση", r.category))
+        lines.append(("Τιμή για «φυσιολογική» σήμερα", f"≥ {_n(e20.normal_value_at(weight_kg, user))} cm"))
+    if r.below_expected_today is not None:
+        today = e20.estimate(weight_kg, user)
+        lines.append(("Αναμενόμενο στο σημερινό βάρος",
+                      f"{_n(today.value_cm)} cm ({_n(today.range_cm[0])} – {_n(today.range_cm[1])})"))
+    for i, e in enumerate(r.estimates):
+        rng = f"{_n(e.range_cm[0])} – {_n(e.range_cm[1])}"
+        normal = f"για «φυσιολογική» ≥ {_n(r.normal_values_at_targets[i])} cm"
+        value = (f"≥ {_n(r.minimums_cm[i])} cm (εκτίμηση {_n(e.value_cm)}, εύρος {rng} · {normal})" if r.minimums_cm
+                 else f"≈ {_n(e.value_cm)} cm ({rng} · {normal})")
+        lines.append((f"Αναμενόμενη γάμπα στα {_n(e.weight_kg)} kg", value))
+    return Section("Γάμπα (Στοιχείο 20)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def ankle_field_note() -> str:
+    """Στοιχείο 21, μήνυμα Τ: «Πάντα, δίπλα στο πεδίο καταχώρησης»."""
+    from davinci import element_21 as e21
+    return e21.load_data()["messages"]["T"]
+
+
+def section_ankle(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 21: χωρίς όριο και στόχο· εκτίμηση ANSUR II σήμερα και στο βάρος-στόχο.
+    Το μήνυμα Τ εμφανίζεται δίπλα στο πεδίο, όχι εδώ."""
+    from davinci import element_21 as e21
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e21.assess(m.ankle_cm, weight_kg, user, [p.weight_kg for p in pts], edema=m.leg_edema,
+                   injured=m.ankle_injured)
+    if m.ankle_cm is None and not r.estimates:
+        return None
+    lines = _cm(m.ankle_cm)
+    if r.today is not None:
+        lines.append(("Αναμενόμενο στο σημερινό βάρος",
+                      f"{_n(r.today.value_cm)} cm ({_n(r.today.range_cm[0])} – {_n(r.today.range_cm[1])})"))
+    lines += _estimate_lines("Αναμενόμενος αστράγαλος", r.estimates)
+    msgs = [x for x in r.messages if x != ankle_field_note()]
+    return Section("Αστράγαλος (Στοιχείο 21)", tuple(lines), _dedupe(msgs), r.indicative)
+
+
 def guide_extra(field: str, sex: str) -> tuple[str, ...]:
     """Επιπλέον κείμενο στο ⓘ ανά φύλο (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
     from davinci import element_13 as e13
@@ -750,7 +804,8 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
         out = [section_ffmi(user, w, f), section_waist(m, user, w), section_hip(m, user, w, f),
                section_neck(m, user, f), section_chest(m, user, w, f), section_shoulders(m, user, w, f),
                section_arm(m, user, w, f), section_forearm(m, user, w, f), section_wrist(m, user, w),
-               section_thigh(m, user, w, f), section_knee(m, user, w, f), section_visceral(m, user, w),
+               section_thigh(m, user, w, f), section_knee(m, user, w, f), section_calf(m, user, w, f),
+               section_ankle(m, user, w, f), section_visceral(m, user, w),
                section_muscle(m, user, w, f), section_water(m, user, w, f), section_hydration(m, user),
                section_bone(m, user, w, f), section_ratios(m, user, w, f, muscle, bone),
                section_analysis(m, user, w, f, muscle, bone)]

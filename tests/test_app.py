@@ -1106,3 +1106,90 @@ def test_screen_batch5(monkeypatch):
     where = {label: g for g, label in f.inputs}
     assert all(where[x].startswith("4.") for x in ("Καρπός (cm)", "Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)",
                                                     "Πάνω από το γόνατο (cm)"))
+
+
+# ---- Δόση 6: Στοιχεία 20 (γάμπα), 21 (αστράγαλος) ----
+from davinci import element_20 as e20  # noqa: E402
+from davinci import element_21 as e21  # noqa: E402
+
+
+def test_e20_document_table11():
+    m20 = e20.load_data()["messages"]
+    s = sec(man139(**ATH), al.Measures(calf_cm=45.5), "Γάμπα")
+    d = dict(s.lines)
+    assert d["Μέτρηση"] == "45,5 cm" and d["Διορθωμένη για τον ΔΜΣ"] == "33,5 cm"
+    assert d["Ταξινόμηση"] == "Μέτρια χαμηλή" and d["Τιμή για «φυσιολογική» σήμερα"] == "≥ 46,0 cm"
+    assert d["Αναμενόμενο στο σημερινό βάρος"] == "48,3 cm (46,4 – 50,2)"
+    assert m20["M"] in s.messages and m20["C"] in s.messages
+    secs, _ = al.measurement_sections(man139(**ATH), al.Measures(calf_cm=45.5))
+    assert any(m20["A"] in x.messages for x in secs)  # κοινό μήνυμα ANSUR: εμφανίζεται μία φορά
+    assert s.indicative  # ΔΜΣ σήμερα εκτός εύρους ANSUR II
+    t = sec(man37(**ATH), al.Measures(calf_cm=45.5), "Γάμπα")  # στόχος 79,3 kg όπως στο έγγραφο
+    assert dict(t.lines)["Αναμενόμενη γάμπα στα 79,3 kg"] == (
+        "≥ 37,7 cm (εκτίμηση 37,7, εύρος 36,2 – 39,2 · για «φυσιολογική» ≥ 37,0 cm)")
+    assert dict(t.lines)["Αναμενόμενη γάμπα στα 67,8 kg"] == (
+        "≥ 35,2 cm (εκτίμηση 35,2, εύρος 33,8 – 36,6 · για «φυσιολογική» ≥ 34,0 cm)")
+    lean = dict(sec(man37(weight_kg=77.0, fat_percent=15.0), al.Measures(calf_cm=36.0), "Γάμπα").lines)  # ΔΜΣ 24,6
+    assert lean["Τιμή για «φυσιολογική» σήμερα"] == "≥ 34,0 cm" and lean["Διορθωμένη για τον ΔΜΣ"] == "36,0 cm"
+
+
+def test_e20_minimum_is_normal_value_when_higher():
+    s = sec(man37(**ATH), al.Measures(), "Γάμπα")
+    for (label, value), est, normal in zip(
+            [x for x in s.lines if x[0].startswith("Αναμενόμενη")],
+            e20.assess(None, 138.9, al._user(man37(**ATH)), [79.3, 67.8]).estimates, (37.0, 34.0)):
+        assert value.startswith(f"≥ {_n1(max(est.value_cm, normal))} cm")
+
+
+def test_e20_health_cases():
+    m20 = e20.load_data()["messages"]
+    h = sec(man37(), al.Measures(calf_cm=40.0), "Γάμπα")  # Υγεία: «≈», χωρίς «≥»
+    assert all(v.startswith("≈ ") for k, v in h.lines if k.startswith("Αναμενόμενη"))
+    assert "Αναμενόμενη γάμπα στα 81,5 kg" in dict(h.lines)
+    ed = sec(man37(), al.Measures(calf_cm=45.5, leg_edema=True), "Γάμπα")
+    assert ed.lines == (("Μέτρηση", "45,5 cm"),) and ed.messages == (m20["edema"],) and not ed.indicative
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(calf_cm=35.0), "Γάμπα")
+    assert minor.lines == (("Μέτρηση", "35,0 cm"),) and minor.messages == (m20["record_only"],)
+    no = sec(man37(), al.Measures(), "Γάμπα")
+    d = dict(no.lines)
+    assert m20["no_value"] in no.messages and "Ταξινόμηση" not in d and "Αναμενόμενο στο σημερινό βάρος" not in d
+    assert "Τιμή για «φυσιολογική» σήμερα" not in d
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Γάμπα") is None
+
+
+def test_e21_document_table10():
+    m21 = e21.load_data()["messages"]
+    s = sec(man139(**ATH), al.Measures(ankle_cm=26.5), "Αστράγαλος")
+    d = dict(s.lines)
+    # έγγραφο 25,5 – 27,8: το έγγραφο στρογγύλεψε πρώτα την εκτίμηση (βλ. NOTES, Στοιχείο 21)
+    assert d["Μέτρηση"] == "26,5 cm" and d["Αναμενόμενο στο σημερινό βάρος"] == "26,6 cm (25,5 – 27,7)"
+    t = dict(sec(man37(**ATH), al.Measures(ankle_cm=26.5), "Αστράγαλος").lines)
+    assert t["Αναμενόμενος αστράγαλος στα 79,3 kg"] == "≈ 22,2 cm (21,2 – 23,1)"
+    assert m21["A"] in s.messages and m21["T"] not in s.messages and s.indicative
+    assert al.ankle_field_note() == m21["T"]
+
+
+def test_e21_edema_injury_and_cases():
+    m21 = e21.load_data()["messages"]
+    x = sec(man37(), al.Measures(ankle_cm=26.5, leg_edema=True, ankle_injured=True), "Αστράγαλος")
+    assert x.lines == (("Μέτρηση", "26,5 cm"),) and x.messages == (m21["edema"], m21["injury"])
+    inj = sec(man37(), al.Measures(ankle_cm=26.5, ankle_injured=True), "Αστράγαλος")
+    assert m21["injury"] in inj.messages and m21["edema"] not in inj.messages
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(ankle_cm=22.0), "Αστράγαλος")
+    assert minor.lines == (("Μέτρηση", "22,0 cm"),) and minor.messages == (m21["record_only"],)
+    no = sec(man37(), al.Measures(), "Αστράγαλος")
+    assert m21["no_value"] in no.messages and no.lines[0][0] == "Αναμενόμενο στο σημερινό βάρος"
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Αστράγαλος") is None
+
+
+def test_screen_batch6(monkeypatch):
+    vals = {**WOMAN, "m_calf": 36.0, "m_ankle": 21.5, "m_edema": True}
+    f = run_app(monkeypatch, vals)
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors and {"Γάμπα (Στοιχείο 20)", "Αστράγαλος (Στοιχείο 21)"} <= set(subs)
+    assert e20.load_data()["messages"]["edema"] in f.texts() and e21.load_data()["messages"]["edema"] in f.texts()
+    assert e21.load_data()["messages"]["T"] in f.texts()  # δίπλα στο πεδίο
+    where = {label: g for g, label in f.inputs}
+    assert where["Γάμπα (cm)"].startswith("4.") and where["Αστράγαλος (cm)"].startswith("4.")
+    f2 = run_app(monkeypatch, {**WOMAN, "m_ankle": 21.5, "m_ankle_injured": True})
+    assert e21.load_data()["messages"]["injury"] in f2.texts() and e20.load_data()["messages"]["edema"] not in f2.texts()

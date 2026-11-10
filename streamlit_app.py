@@ -83,6 +83,11 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         thigh18 = measure_input("Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh18", "μηρός")
         knee = measure_input("Πάνω από το γόνατο (cm)", "m_knee", "γόνατο")
         swollen = st.checkbox("Το γόνατο είναι πρησμένο ή τραυματισμένο", key="m_knee_swollen")
+        calf = measure_input("Γάμπα (cm)", "m_calf", "γάμπα")
+        ankle = measure_input("Αστράγαλος (cm)", "m_ankle", "αστράγαλος")
+        st.caption(al.ankle_field_note())
+        edema = st.checkbox("Πρήξιμο (οίδημα) στα πόδια ή στον αστράγαλο", key="m_edema")
+        injured = st.checkbox("Ο αστράγαλος είναι τραυματισμένος (π.χ. διάστρεμμα)", key="m_ankle_injured")
 
     hydration = hydration_inputs()
     medical = professional_inputs(sex, birth) if level == "Professional" else {}
@@ -90,7 +95,8 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
                     scale_water_percent=water, scale_bone_percent=bone, hip_cm=hip, neck_cm=neck, chest_cm=chest,
                     shoulders_cm=shoulders, arm_relaxed_cm=arm_rel, biceps_flexed_cm=biceps,
                     forearm_relaxed_cm=fore_rel, forearm_flexed_cm=fore_flx, wrist_cm=wrist, thigh_cm=thigh18,
-                    knee_cm=knee, knee_swollen=swollen,
+                    knee_cm=knee, knee_swollen=swollen, calf_cm=calf, ankle_cm=ankle, leg_edema=edema,
+                    ankle_injured=injured,
                     **hydration, **medical)
 
     missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),

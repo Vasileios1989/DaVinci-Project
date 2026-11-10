@@ -941,3 +941,97 @@ def test_pro_n4_needs_two_real_sources_and_menopause_choice(monkeypatch):
     md_no = [a[0] for n, a, k in no.shown if n == "markdown"]
     assert "**Υγεία οστών (T-score, DXA):** Οστεοπόρωση (κατά την πυκνότητα)" in md_yes
     assert not any(x.startswith("**Υγεία οστών") for x in md_no)
+
+
+# ================================================================ Δόση 4: 14, 15, 16
+from davinci import element_14 as e14  # noqa: E402
+from davinci import element_15 as e15  # noqa: E402
+from davinci import element_16 as e16  # noqa: E402
+
+
+def test_e14_document_table9():
+    m14 = e14.load_data()["messages"]
+    s = sec(man37(**ATH), al.Measures(shoulders_cm=138.0), "Ώμοι")
+    # Ο Πίνακας 9 βγαίνει με τον όρο ηλικίας που ο Πίνακας 3 παραλείπει (εύρημα στο NOTES): 114,7 → ο κώδικας 116,3
+    assert s.lines == (("Μέτρηση", "138,0 cm"), ("Αναμενόμενοι ώμοι στα 79,3 kg", "≈ 116,3 cm (113,1 – 119,7)"),
+                       ("Αναμενόμενοι ώμοι στα 67,8 kg", "≈ 110,9 cm (107,8 – 114,1)"))
+    assert s.messages == (m14["A"], m14["B"]) and not s.indicative
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Ώμοι") is None
+    no = sec(man37(), al.Measures(), "Ώμοι")
+    assert m14["no_value"] in no.messages and no.lines[0][0].startswith("Αναμενόμενοι ώμοι")
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(shoulders_cm=90.0), "Ώμοι")
+    assert minor.lines == (("Μέτρηση", "90,0 cm"),) and m14["record_only"] in minor.messages
+
+
+def test_e15_document_table11():
+    m15 = e15.load_data()["messages"]
+    s = sec(man139(**ATH), al.Measures(arm_relaxed_cm=40.0, biceps_flexed_cm=40.0), "Μπράτσο")
+    d = dict(s.lines)
+    assert d["Μπράτσο χαλαρό"] == "40,0 cm" and d["Διορθωμένο για τον ΔΜΣ"] == "30,0 cm"
+    assert d["Ταξινόμηση"] == "Φυσιολογικό" and d["Ελάχιστο για «Φυσιολογικό» σήμερα"] == "≥ 38,0 cm"
+    assert d["Αναμενόμενο στο σημερινό βάρος"] == "46,2 cm (43,9 – 48,5)"
+    assert m15["O"] in s.messages and m15["C"] in s.messages and s.indicative  # ΔΜΣ 44,4 > 43,5
+    pts = e03.weight_target(139.1, 42.9, al._user(man139(**ATH))).points
+    flx = e15.assess_flexed(40.0, 139.1, al._user(man139(**ATH)), [p.weight_kg for p in pts])
+    assert flx.is_minimum and [k for k, _ in s.lines][-2:] == [f"Αναμενόμενος δικέφαλος στα {_n1(p.weight_kg)} kg"
+                                                               for p in pts]
+    assert all(v.startswith("≥ ") and "(εύρος " in v for k, v in s.lines if k.startswith("Αναμενόμενος δικέφαλος"))
+
+
+def _n1(x):
+    from davinci.fmt import num
+    return num(x)
+
+
+def test_e15_doc_targets_with_doc_weights():
+    # Πίνακας 11: Αθλητικό 13% (79,3 kg) → ≥ 34,1 cm (εύρος 32,4 – 35,8)
+    s = sec(man37(**ATH), al.Measures(biceps_flexed_cm=36.0), "Μπράτσο")
+    assert ("Αναμενόμενος δικέφαλος στα 79,3 kg", "≥ 34,1 cm (εύρος 32,4 – 35,8)") in s.lines
+    h = sec(man37(resistance_training=True), al.Measures(biceps_flexed_cm=36.0), "Μπράτσο")  # Υγεία: πληροφορία
+    assert ("Αναμενόμενος δικέφαλος στα 90,0 kg", "≈ 36,5 cm (34,7 – 38,3)") in h.lines
+
+
+def test_e15_cases():
+    m15 = e15.load_data()["messages"]
+    low = sec(man37(weight_kg=95.0, fat_percent=30.0), al.Measures(arm_relaxed_cm=33.0), "Μπράτσο")  # ΔΜΣ 30,3
+    assert dict(low.lines)["Διορθωμένο για τον ΔΜΣ"] == "26,0 cm" and dict(low.lines)["Ταξινόμηση"] == "Χαμηλό"
+    thin = sec(man37(weight_kg=55.0, fat_percent=10.0), al.Measures(arm_relaxed_cm=25.0), "Μπράτσο")  # ΔΜΣ 17,6
+    assert m15["relaxed_low_bmi"] in thin.messages and dict(thin.lines)["Ταξινόμηση"] == "Πολύ χαμηλό"
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(arm_relaxed_cm=25.0), "Μπράτσο")
+    assert minor.lines == (("Μπράτσο χαλαρό", "25,0 cm"),) and m15["record_only"] in minor.messages
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Μπράτσο") is None
+    only_flexed = sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(biceps_flexed_cm=36.0), "Μπράτσο")
+    assert ("Δικέφαλος σφιγμένος", "36,0 cm") in only_flexed.lines
+    asian = sec(man37(weight_kg=80.0, fat_percent=15.0, ancestry="3a"), al.Measures(arm_relaxed_cm=33.0), "Μπράτσο")
+    assert m15["relaxed_ancestry"] in asian.messages and asian.indicative
+
+
+def test_e16_document_table10_and_cases():
+    m16 = e16.load_data()["messages"]
+    s = sec(man139(**ATH), al.Measures(forearm_relaxed_cm=32.6), "Πήχης")
+    d = dict(s.lines)
+    assert d["Πήχης χαλαρός"] == "32,6 cm" and d["Ταξινόμηση"] == "Φυσιολογικό (όριο 24,9 cm)"
+    assert m16["O"] in s.messages and m16["relaxed_bmi_30"] in s.messages and m16["no_flexed"] in s.messages
+    assert s.indicative  # από τον χαλαρό πήχη (ΔΜΣ ≥ 30), όχι από τον σφιγμένο
+    assert "Αναμενόμενο στο σημερινό βάρος" not in d  # χωρίς σφιγμένο: καμία σύγκριση
+    doc = sec(man37(**ATH), al.Measures(forearm_flexed_cm=30.0), "Πήχης")
+    assert ("Αναμενόμενος πήχης στα 79,3 kg", "≥ 30,0 cm (εύρος 28,9 – 31,3)") in doc.lines
+    today = sec(man139(**ATH), al.Measures(forearm_flexed_cm=30.0), "Πήχης")
+    assert ("Αναμενόμενο στο σημερινό βάρος", "37,1 cm (35,6 – 38,6)") in today.lines and m16["C"] in today.messages
+    w = sec(man37(sex="Γυναίκα", weight_kg=60.0, fat_percent=28.0), al.Measures(forearm_relaxed_cm=21.0), "Πήχης")
+    assert dict(w.lines)["Ταξινόμηση"] == "Χαμηλό (όριο 21,7 cm)" and w.messages[0] == m16["X"]
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(forearm_relaxed_cm=20.0), "Πήχης")
+    assert minor.lines == (("Πήχης χαλαρός", "20,0 cm"),) and m16["record_only"] in minor.messages
+
+
+def test_screen_batch4(monkeypatch):
+    vals = {**WOMAN, "m_shoulders": 100.0, "m_arm_rel": 30.0, "m_biceps": 31.0, "m_fore_rel": 24.0, "m_fore_flx": 25.0}
+    f = run_app(monkeypatch, vals)
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors
+    assert {"Ώμοι (Στοιχείο 14)", "Μπράτσο και δικέφαλος (Στοιχείο 15)", "Πήχης (Στοιχείο 16)"} <= set(subs)
+    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    assert "**Μπράτσο χαλαρό:** 30,0 cm" in md and "**Πήχης σφιγμένος:** 25,0 cm" in md
+    where = {label: g for g, label in f.inputs}
+    assert where["Ώμοι (cm)"].startswith("3.") and where["Μπράτσο χαλαρό (cm)"].startswith("4.")
+    assert where["Πήχης σφιγμένος (cm)"].startswith("4.") and f.placeholders["Ώμοι (cm)"] == "Προαιρετικό"

@@ -306,6 +306,11 @@ class Measures:
     t_score: float | None = None
     z_score: float | None = None
     menopause: bool | None = None
+    shoulders_cm: float | None = None
+    arm_relaxed_cm: float | None = None
+    biceps_flexed_cm: float | None = None
+    forearm_relaxed_cm: float | None = None
+    forearm_flexed_cm: float | None = None
 
 
 @dataclass(frozen=True)
@@ -608,6 +613,73 @@ def section_chest(m: Measures, user: e01.UserCategories, weight_kg: float, fat_p
     return Section("Στήθος (Στοιχείο 13)", tuple(lines), _dedupe(r.messages), r.indicative)
 
 
+def _estimate_lines(name: str, ests, minimum: bool = False) -> list[tuple[str, str]]:
+    """Εκτιμήσεις ANSUR II στο βάρος-στόχο· «≥» όταν η εκτίμηση είναι κατώτατο όριο (15, 16: Αθλητικό / Bodybuilding)."""
+    return [(f"{name} στα {_n(e.weight_kg)} kg",
+             f"≥ {_n(e.value_cm)} cm (εύρος {_n(e.range_cm[0])} – {_n(e.range_cm[1])})" if minimum
+             else f"≈ {_n(e.value_cm)} cm ({_n(e.range_cm[0])} – {_n(e.range_cm[1])})") for e in ests]
+
+
+def section_shoulders(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 14 (Πίνακες 3–8): καμία ταξινόμηση· εκτίμηση ANSUR II στο βάρος-στόχο."""
+    from davinci import element_14 as e14
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e14.assess(user, m.shoulders_cm, [p.weight_kg for p in pts])
+    if m.shoulders_cm is None and not r.estimates:
+        return None
+    lines = _cm(m.shoulders_cm) + _estimate_lines("Αναμενόμενοι ώμοι", r.estimates)
+    return Section("Ώμοι (Στοιχείο 14)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def _flexed_lines(label: str, f, name: str) -> list[tuple[str, str]]:
+    lines = [] if f.measured_cm is None else [(label, f"{_n(f.measured_cm)} cm")]
+    if f.today is not None:  # έλεγχος σήμερα (μήνυμα Γ)
+        lo, hi = f.today.range_cm
+        lines.append((f"Αναμενόμενο στο σημερινό βάρος", f"{_n(f.today.value_cm)} cm ({_n(lo)} – {_n(hi)})"))
+    return lines + _estimate_lines(name, f.estimates, f.is_minimum)
+
+
+def section_arm(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 15: μπράτσο χαλαρό (όριο με διόρθωση ΔΜΣ, Πίνακες 3–4) και δικέφαλος σφιγμένος (ANSUR II)."""
+    from davinci import element_15 as e15
+    pts = _targets(weight_kg, fat_percent, user)
+    rel = e15.assess_relaxed(m.arm_relaxed_cm, weight_kg, user)
+    flx = e15.assess_flexed(m.biceps_flexed_cm, weight_kg, user, [p.weight_kg for p in pts])
+    if m.arm_relaxed_cm is None and m.biceps_flexed_cm is None and not flx.estimates:
+        return None
+    lines: list[tuple[str, str]] = []
+    if m.arm_relaxed_cm is not None:
+        lines.append(("Μπράτσο χαλαρό", f"{_n(m.arm_relaxed_cm)} cm"))
+    if rel.corrected_cm is not None:
+        lines.append(("Διορθωμένο για τον ΔΜΣ", f"{_n(rel.corrected_cm)} cm"))
+        lines.append(("Ταξινόμηση", rel.category))
+    adult = not (user.age < e15.load_data()["relaxed_arm"]["min_age"] or user.pregnant_or_breastfeeding)
+    if adult:  # Πίνακας 11: ελάχιστο για «Φυσιολογικό» στο σημερινό βάρος
+        lines.append(("Ελάχιστο για «Φυσιολογικό» σήμερα", f"≥ {_n(e15.minimum_for_normal(weight_kg, user))} cm"))
+    lines += _flexed_lines("Δικέφαλος σφιγμένος", flx, "Αναμενόμενος δικέφαλος")
+    return Section("Μπράτσο και δικέφαλος (Στοιχείο 15)", tuple(lines), _dedupe([*rel.messages, *flx.messages]),
+                   rel.indicative or flx.indicative)
+
+
+def section_forearm(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 16: πήχης χαλαρός (όριο Canda 2015, Πίνακας 3) και πήχης σφιγμένος (ANSUR II)."""
+    from davinci import element_16 as e16
+    pts = _targets(weight_kg, fat_percent, user)
+    rel = e16.assess_relaxed(m.forearm_relaxed_cm, weight_kg, user)
+    flx = e16.assess_flexed(m.forearm_flexed_cm, weight_kg, user, [p.weight_kg for p in pts])
+    if m.forearm_relaxed_cm is None and m.forearm_flexed_cm is None and not flx.estimates:
+        return None
+    lines: list[tuple[str, str]] = []
+    if m.forearm_relaxed_cm is not None:
+        lines.append(("Πήχης χαλαρός", f"{_n(m.forearm_relaxed_cm)} cm"))
+    if rel.category:
+        limit = e16.load_data()["relaxed_forearm"][user.sex]["normal_ge"]
+        lines.append(("Ταξινόμηση", f"{rel.category} (όριο {_n(limit)} cm)"))
+    lines += _flexed_lines("Πήχης σφιγμένος", flx, "Αναμενόμενος πήχης")
+    return Section("Πήχης (Στοιχείο 16)", tuple(lines), _dedupe([*rel.messages, *flx.messages]),
+                   rel.indicative or flx.indicative)
+
+
 def guide_extra(field: str, sex: str) -> tuple[str, ...]:
     """Επιπλέον κείμενο στο ⓘ ανά φύλο (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
     from davinci import element_13 as e13
@@ -626,7 +698,8 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
         muscle = e07.assess(w, f, user, scale_percent=m.scale_muscle_percent, medical_kg=m.medical_muscle_kg).muscle_kg
         bone = _bone(m, user, w, f)
         out = [section_ffmi(user, w, f), section_waist(m, user, w), section_hip(m, user, w, f),
-               section_neck(m, user, f), section_chest(m, user, w, f), section_visceral(m, user, w),
+               section_neck(m, user, f), section_chest(m, user, w, f), section_shoulders(m, user, w, f),
+               section_arm(m, user, w, f), section_forearm(m, user, w, f), section_visceral(m, user, w),
                section_muscle(m, user, w, f), section_water(m, user, w, f), section_hydration(m, user),
                section_bone(m, user, w, f), section_ratios(m, user, w, f, muscle, bone),
                section_analysis(m, user, w, f, muscle, bone)]

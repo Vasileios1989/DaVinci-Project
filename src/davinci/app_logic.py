@@ -280,6 +280,16 @@ def clean_rows(records: list[dict]) -> list[tuple[date, float, str, bool]]:
 
 # --- Καρτέλα «Μετρήσεις» (Στοιχεία 05–39, σε δόσεις) -------------------------------------------------------
 @dataclass(frozen=True)
+class Skinfold:
+    """Μία δερματοπτυχή (Στοιχεία 33–36), σε mm: δύο μετρήσεις, ή τρεις όταν οι δύο διαφέρουν πάνω από 5%."""
+    mm: tuple[float, ...] = ()
+    not_measured: bool = False  # «η πτυχή δεν πιάνεται ή ξεπερνά τη δαγκάνα»
+    left_side: bool = False
+    edema: bool = False
+    confirmed: bool = False  # επιβεβαίωση τιμής κάτω από 2 ή πάνω από 50 mm
+
+
+@dataclass(frozen=True)
 class Measures:
     """Μετρήσεις της φόρμας· None = δεν μετρήθηκε."""
     waist_cm: float | None = None
@@ -331,6 +341,17 @@ class Measures:
     knee_side: str = "δεξί"
     knee_breadth_edema: bool = False  # πρήξιμο ή μώλωπας στο γόνατο
     knee_breadth_injured: bool = False  # τραυματισμός, πρόθεση ή αρθρίτιδα στο δεξί γόνατο
+    # Professional, κατηγορία 6 (Στοιχεία 33–36)
+    sf_isak: bool | None = None  # ο εξεταστής ακολούθησε το ISAK· None = «δεν ξέρω»
+    sf_caliper: str | None = None
+    triceps: Skinfold = Skinfold()
+    postpartum_recent: bool = False  # πρώτες εβδομάδες μετά τον τοκετό (Στοιχείο 33)
+    subscapular: Skinfold = Skinfold()
+    supraspinale: Skinfold = Skinfold()
+    supraspinale_site_confirmed: bool | None = None  # μέτρηση μπροστά, πάνω από τη λεκάνη· None = «δεν ξέρω»
+    calf_skinfold: Skinfold = Skinfold()
+    calf_skinfold_at_max_girth: bool = True
+    calf_varicose: bool = False  # κιρσοί στη δεξιά γάμπα → μέτρηση αριστερά
 
 
 @dataclass(frozen=True)
@@ -989,6 +1010,113 @@ def section_knee_breadth(m: Measures, user: e01.UserCategories, weight_kg: float
     return Section(title, tuple(lines), _dedupe(r.messages))
 
 
+_RACE_NAMES = {"white": "λευκοί μη ισπανόφωνοι", "black": "μαύροι μη ισπανόφωνοι"}
+
+
+def _athlete_table(athletes: dict | None, sex: str) -> tuple[tuple[str, ...], ...]:
+    """Πίνακας αθλητών των Στοιχείων 33–36: σύγκριση, όχι στόχος· μόνο 18+."""
+    if not athletes:
+        return ()
+    rows = [("Αθλητές (σύγκριση, όχι στόχος)", "Τιμή", "Πηγή")]
+    for name, v in athletes.items():
+        if not isinstance(v, dict):
+            continue
+        x = v[sex]
+        value = " / ".join(_n(a) for a in x) if len(x) == 3 else f"{_n(x[0])} ± {_n(x[1])}"
+        rows.append((name, value + " mm", v["source"]))
+    return tuple(rows)
+
+
+def _skinfold_section(title: str, sf: Skinfold, user: e01.UserCategories, run, d: dict,
+                      percentile_source: str, extra=lambda r: []) -> Section | None:
+    """Κοινή εμφάνιση των Στοιχείων 33–36 (μόνο Professional). Η ενότητα εμφανίζεται όταν δόθηκε τιμή
+    ή δηλώθηκε «Δεν μετρήθηκε» (σύμβαση εφαρμογής)."""
+    from davinci import element_46 as e46
+    from davinci import skinfolds
+    if not e46.element_available(d["element"], user.level) or not (sf.mm or sf.not_measured):
+        return None
+    mm_line = [("Μετρήσεις", " · ".join(_n(x) for x in sf.mm) + " mm")] if sf.mm else []
+    try:
+        r = run(list(sf.mm) or None)
+    except e01.InvalidInput as exc:  # π.χ. μία μόνο μέτρηση ή δαγκάνα που δεν δηλώθηκε
+        return Section(title, tuple(mm_line), warnings=(str(exc),))
+    if not r.messages and r.value_mm is None:
+        return None
+    lines = list(mm_line)
+    if r.value_mm is not None:
+        lines.append(("Τιμή", f"{_n(r.value_mm)} mm"))
+    if r.position is not None:
+        lines.append((f"Εκατοστημόριο ({percentile_source}, {r.table_row} ετών)",
+                      r.position.label + (" · αβέβαιη" if r.uncertain else "")))
+    if r.race_position is not None:
+        name = _RACE_NAMES[d["race_rows"][user.effective_group]]
+        lines.append((f"Εκατοστημόριο ανά καταγωγή ({name}, {skinfolds.race_band(user.age)} ετών)",
+                      r.race_position.label))
+    if r.comparison is not None:
+        c = r.comparison
+        lines.append((f"Μέσος όρος (Ιταλία 2024, {c.group} ετών)", f"{_n(c.mean)} ± {_n(c.sd)} mm"))
+    lines += extra(r)
+    return Section(title, tuple(lines), _dedupe(r.messages), r.indicative, _athlete_table(r.athletes, user.sex))
+
+
+def section_triceps(m: Measures, user: e01.UserCategories) -> Section | None:
+    """Στοιχείο 33: εκατοστημόριο NHANES 2007–2010 (Πίνακες 3–5), αθλητές (Πίνακας 6)."""
+    from davinci import element_33 as e33
+    sf = m.triceps
+    return _skinfold_section(
+        "Δερματοπτυχή τρικεφάλου (Στοιχείο 33)", sf, user,
+        lambda mm: e33.assess(mm, user, isak=m.sf_isak, caliper=m.sf_caliper, left_side=sf.left_side,
+                              confirmed=sf.confirmed, edema=sf.edema, postpartum_recent=m.postpartum_recent),
+        e33.load_data(), "ΗΠΑ 2007–2010")
+
+
+def section_subscapular(m: Measures, user: e01.UserCategories) -> Section | None:
+    """Στοιχείο 34: όπως το 33, χωρίς μήνυμα κινδύνου."""
+    from davinci import element_34 as e34
+    sf = m.subscapular
+    return _skinfold_section(
+        "Δερματοπτυχή υποπλάτιου (Στοιχείο 34)", sf, user,
+        lambda mm: e34.assess(mm, user, isak=m.sf_isak, caliper=m.sf_caliper, left_side=sf.left_side,
+                              confirmed=sf.confirmed, edema=sf.edema),
+        e34.load_data(), "ΗΠΑ 2007–2010")
+
+
+def section_supraspinale(m: Measures, user: e01.UserCategories) -> Section | None:
+    """Στοιχείο 35: μέσος όρος ± ΤΑ (Campa 2025), χωρίς εκατοστημόριο· επιβεβαίωση σημείου."""
+    from davinci import element_35 as e35
+    sf = m.supraspinale
+    return _skinfold_section(
+        "Δερματοπτυχή υπερακάνθιου (Στοιχείο 35)", sf, user,
+        lambda mm: e35.assess(mm, user, site_confirmed=m.supraspinale_site_confirmed, isak=m.sf_isak,
+                              caliper=m.sf_caliper, left_side=sf.left_side, confirmed=sf.confirmed, edema=sf.edema),
+        e35.load_data(), "")
+
+
+def section_calf_skinfold(m: Measures, user: e01.UserCategories, weight_kg: float) -> Section | None:
+    """Στοιχείο 36: εκατοστημόριο CHMS (ΔΜΣ < 30), μέσος όρος Campa, διορθωμένη περιφέρεια γάμπας."""
+    from davinci import element_36 as e36
+    sf, d = m.calf_skinfold, e36.load_data()
+
+    def corrected(r):
+        if r.corrected_calf_cm is None:
+            return []
+        note = f" (ενδεικτική: {d['reasons']['not_at_max_girth']})" if r.corrected_indicative else ""
+        return [("Διορθωμένη περιφέρεια γάμπας", f"{_n(r.corrected_calf_cm, 2)} cm{note}")]
+    return _skinfold_section(
+        "Δερματοπτυχή γάμπας (Στοιχείο 36)", sf, user,
+        lambda mm: e36.assess(mm, user, weight_kg, calf_cm=m.calf_cm, at_max_girth=m.calf_skinfold_at_max_girth,
+                              isak=m.sf_isak, caliper=m.sf_caliper, left_varicose=m.calf_varicose,
+                              left_side=sf.left_side, edema_or_cellulite=sf.edema, confirmed=sf.confirmed),
+        d, "Καναδάς 2007–2009, ΔΜΣ κάτω από 30", corrected)
+
+
+def skinfold_notes() -> dict[str, str]:
+    """Μηνύματα «πριν τη μέτρηση» των Στοιχείων 35 και 36 (δίπλα στα πεδία)."""
+    from davinci import element_35 as e35
+    from davinci import element_36 as e36
+    return {"35": e35.before_message(), "36": e36.before_message()}
+
+
 def guide_extra(field: str, sex: str) -> tuple[str, ...]:
     """Επιπλέον κείμενο στο ⓘ ανά φύλο (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
     from davinci import element_13 as e13
@@ -1016,7 +1144,9 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
                section_shoulders_waist(m, user, w, f), section_forearm_biceps(m, user, w, f),
                section_thigh_calf(m, user, w, f), section_wrist_biceps(m, user, w, f),
                section_ankle_calf(m, user, w, f), section_thigh_knee(m, user, w, f),
-               section_frame(m, user), section_knee_breadth(m, user, w), section_visceral(m, user, w),
+               section_frame(m, user), section_knee_breadth(m, user, w), section_triceps(m, user),
+               section_subscapular(m, user), section_supraspinale(m, user), section_calf_skinfold(m, user, w),
+               section_visceral(m, user, w),
                section_muscle(m, user, w, f), section_water(m, user, w, f), section_hydration(m, user),
                section_bone(m, user, w, f), section_ratios(m, user, w, f, muscle, bone),
                section_analysis(m, user, w, f, muscle, bone)]

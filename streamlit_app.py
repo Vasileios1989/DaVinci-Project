@@ -129,10 +129,52 @@ def e31_options() -> list[str]:
     return list(e31.load_data()["measured_by"])
 
 
+ISAK = {"Ναι": True, "Όχι": False, "Δεν ξέρω": None}
+
+
+def skinfold(name: str, key: str, field: str, left_label: str, edema_label: str) -> al.Skinfold:
+    """Μία δερματοπτυχή σε mm (Στοιχεία 33–36): 2 μετρήσεις και 3η όταν διαφέρουν πάνω από 5%."""
+    st.markdown(f"**{name}**")
+    vals = [measure_input(f"{name} — 1η μέτρηση (mm)", f"{key}1", field),
+            measure_input(f"{name} — 2η μέτρηση (mm)", f"{key}2", None),
+            measure_input(f"{name} — 3η μέτρηση, μόνο αν οι δύο διαφέρουν πάνω από 5% (mm)", f"{key}3", None)]
+    mm = tuple(x for x in vals if x is not None)
+    not_measured = False if mm else st.checkbox("Δεν μετρήθηκε (η πτυχή δεν πιάνεται ή ξεπερνά τη δαγκάνα)",
+                                                key=f"{key}_nm")
+    left = st.checkbox(left_label, key=f"{key}_left")
+    edema = st.checkbox(edema_label, key=f"{key}_edema")
+    lo, hi = SKINFOLD_RANGE
+    confirmed = (st.checkbox("Επιβεβαιώνω ότι η τιμή είναι σε χιλιοστά (mm)", key=f"{key}_ok")
+                 if any(x < lo or x > hi for x in mm) else False)
+    return al.Skinfold(mm, not_measured, left, edema, confirmed)
+
+
+def skinfold_inputs(sex: str) -> dict:
+    st.markdown("**Δερματοπτυχές (mm)**")
+    isak = st.radio("Ο εξεταστής ακολούθησε το πρωτόκολλο ISAK;", list(ISAK), index=2, horizontal=True, key="p_isak")
+    caliper = st.selectbox("Δαγκάνα", al.calipers(), index=None, placeholder="Επίλεξε δαγκάνα", key="p_caliper")
+    tri = skinfold("Τρικέφαλος", "p_tri", "δερματοπτυχή τρικεφάλου", "Μέτρηση στο αριστερό χέρι",
+                   "Οίδημα ή λεμφοίδημα στο χέρι")
+    post = (st.checkbox("Πρώτες εβδομάδες μετά τον τοκετό", key="p_postpartum") if sex == "Γυναίκα" else False)
+    sub = skinfold("Υποπλάτιος", "p_sub", "δερματοπτυχή υποπλάτιου", "Μέτρηση στην αριστερή πλευρά", "Οίδημα")
+    st.caption(al.skinfold_notes()["35"])
+    site = st.radio("Μέτρησες την υπερακάνθια μπροστά, πάνω από τη λεκάνη;", ["Ναι", "Δεν ξέρω"], index=1,
+                    horizontal=True, key="p_sup_site")
+    sup = skinfold("Υπερακάνθιος", "p_sup", "δερματοπτυχή υπερακάνθιου", "Μέτρηση στην αριστερή πλευρά", "Οίδημα")
+    st.caption(al.skinfold_notes()["36"])
+    calf = skinfold("Γάμπα (δερματοπτυχή)", "p_calf", "δερματοπτυχή γάμπας", "Μέτρηση στο αριστερό πόδι",
+                    "Πρήξιμο ή κυτταρίτιδα στη γάμπα")
+    at_max = st.checkbox("Η δερματοπτυχή μετρήθηκε στο ύψος της μέγιστης περιφέρειας γάμπας", value=True,
+                         key="p_calf_atmax")
+    varicose = st.checkbox("Κιρσοί στη δεξιά γάμπα (μέτρηση στην αριστερή)", key="p_calf_varicose")
+    return dict(sf_isak=ISAK[isak], sf_caliper=caliper, triceps=tri, postpartum_recent=post, subscapular=sub,
+                supraspinale=sup, supraspinale_site_confirmed=True if site == "Ναι" else None, calf_skinfold=calf,
+                calf_skinfold_at_max_girth=at_max, calf_varicose=varicose)
+
+
 def professional_inputs(sex: str, birth) -> dict:
     """Κατηγορίες 6 και 7: μόνο στο επίπεδο Professional (Στοιχείο 46)."""
     with st.expander("6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)"):
-        st.caption("Οι 4 δερματοπτυχές (τρικέφαλος, υποπλάτιος, υπερακάνθιος, γάμπα) μπαίνουν εδώ στην επόμενη δόση.")
         elbow = measure_input("Εύρος αγκώνα (cm)", "p_elbow", "εύρος αγκώνα")
         elbow_left = st.checkbox("Μέτρηση στο αριστερό χέρι (το δεξί δεν μπορεί να μετρηθεί)", key="p_elbow_left")
         elbow_cond = st.checkbox("Κάταγμα, φλεγμονή ή οίδημα στον αγκώνα", key="p_elbow_cond")
@@ -146,6 +188,7 @@ def professional_inputs(sex: str, birth) -> dict:
         side = st.radio("Πόδι", ["δεξί", "αριστερό"], horizontal=True, key="p_knee_side")
         knee_edema = st.checkbox("Πρήξιμο ή μώλωπας στο γόνατο", key="p_knee_edema")
         knee_inj = st.checkbox("Τραυματισμός, πρόθεση ή αρθρίτιδα στο δεξί γόνατο", key="p_knee_inj")
+        sf = skinfold_inputs(sex)
     with st.expander("7. Ιατρικές εξετάσεις (προαιρετικά)"):
         st.caption(al.medical_message())
         ct = measure_input("Σπλαχνικό λίπος — αξονική ή μαγνητική τομογραφία (cm²)", "x_ct", None)
@@ -165,7 +208,7 @@ def professional_inputs(sex: str, birth) -> dict:
                                 key="x_meno")
     return dict(elbow_cm=elbow, elbow_left_arm=elbow_left, elbow_condition=elbow_cond,
                 knee_breadths=tuple(x for x in knee if x is not None), knee_measured_by=measured_by, knee_side=side,
-                knee_breadth_edema=knee_edema, knee_breadth_injured=knee_inj, ct_visceral_cm2=ct, visceral_volume=vol, medical_muscle_kg=mus, isotope_water_kg=wat,
+                knee_breadth_edema=knee_edema, knee_breadth_injured=knee_inj, **sf, ct_visceral_cm2=ct, visceral_volume=vol, medical_muscle_kg=mus, isotope_water_kg=wat,
                 serum_osmolality=osm, osmolality_inputs=tuple(calc) if all(x is not None for x in calc) else None,
                 dxa_bone_kg=bone, t_score=t, z_score=z, menopause=None if meno is None else meno == "Ναι")
 
@@ -311,6 +354,7 @@ def guide_box(field: str | None, extra: tuple[str, ...] = ()) -> None:
 
 
 OPTIONAL = "Προαιρετικό"
+SKINFOLD_RANGE = (2, 50)  # Στοιχεία 33–36: τιμή κάτω από 2 ή πάνω από 50 mm ζητά επιβεβαίωση
 
 
 def measure_input(label: str, key: str, field: str | None, *, min_value: float | None = 0.1,

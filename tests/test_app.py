@@ -1511,3 +1511,131 @@ def test_screen_batch9(monkeypatch):
     assert e31.load_data()["messages"]["self"] in f2.texts() and e30.load_data()["messages"]["A"] in f2.texts()
     normal = run_app(monkeypatch, {**WOMAN, "p_elbow": 6.5})
     assert "Εύρος αγκώνα (cm)" not in {label for g, label in normal.inputs}
+
+
+# ---- Δόση 10: Στοιχεία 33–36 (δερματοπτυχές, Professional) ----
+from davinci import element_33 as e33  # noqa: E402
+from davinci import element_34 as e34  # noqa: E402
+from davinci import element_35 as e35  # noqa: E402
+from davinci import element_36 as e36  # noqa: E402
+
+SF = al.Skinfold
+HARP = dict(sf_isak=True, sf_caliper="Harpenden / Holtain")
+
+
+def man30(**kw):  # τα παραδείγματα των εγγράφων 33 και 36: άνδρας 30 ετών, 178 cm, ΔΜΣ 24
+    return man37(birth_date=date(1996, 1, 1), height_cm=178.0, weight_kg=76.0, fat_percent=15.0, **PRO, **kw)
+
+
+def test_e33_e36_document_examples():
+    m = al.Measures(**HARP, triceps=SF((10.2, 10.6)), calf_skinfold=SF((7.0, 7.2)), calf_cm=38.0)
+    t = sec(man30(), m, "Δερματοπτυχή τρικεφάλου")
+    d = dict(t.lines)
+    assert d["Τιμή"] == "10,4 mm" and d["Εκατοστημόριο (ΗΠΑ 2007–2010, 30–39 ετών)"] == "28ο" and t.indicative
+    m33 = e33.load_data()["messages"]
+    assert t.messages[1] == m33["indicative"].replace("[λόγος]", "ISAK έναντι πρωτοκόλλου NHANES")
+    assert t.table[1] == ("Βαλένθια (10ο / 50ό / 90ό)", "5,2 / 8,0 / 13,0 mm", "Garrido-Chamorro 2012")
+    assert "Εκατοστημόριο ανά καταγωγή (λευκοί μη ισπανόφωνοι, 20–39 ετών)" in d
+    c = sec(man30(), m, "Δερματοπτυχή γάμπας")
+    dc = dict(c.lines)
+    assert dc["Τιμή"] == "7,1 mm" and dc["Εκατοστημόριο (Καναδάς 2007–2009, ΔΜΣ κάτω από 30, 20–39 ετών)"] == "37ο"
+    assert dc["Μέσος όρος (Ιταλία 2024, 30–34 ετών)"] == "8,4 ± 5,0 mm" and dc["Διορθωμένη περιφέρεια γάμπας"] == "37,29 cm"
+    assert any("1,3 mm κάτω από τον μέσο όρο" in x for x in c.messages)
+
+
+def test_e34_e35_display():
+    m = al.Measures(**HARP, subscapular=SF((12.0, 12.0)), supraspinale=SF((9.0, 9.0)), supraspinale_site_confirmed=True)
+    s = sec(man30(), m, "Δερματοπτυχή υποπλάτιου")
+    assert dict(s.lines)["Εκατοστημόριο (ΗΠΑ 2007–2010, 30–39 ετών)"] == "17ο" and s.table[0][0].startswith("Αθλητές")
+    p = sec(man30(), m, "Δερματοπτυχή υπερακάνθιου")
+    assert dict(p.lines)["Μέσος όρος (Ιταλία 2024, 30–34 ετών)"] == "15,6 ± 8,4 mm"
+    assert not any(k.startswith("Εκατοστημόριο") for k, v in p.lines)  # Στοιχείο 35: χωρίς εκατοστημόριο
+    unknown = sec(man30(), al.Measures(**HARP, supraspinale=SF((9.0, 9.0))), "Δερματοπτυχή υπερακάνθιου")
+    assert any(e35.load_data()["reasons"]["site_unknown"] in x for x in unknown.messages)
+
+
+def test_skinfold_input_cases():
+    m33 = e33.load_data()["messages"]
+    third = sec(man30(), al.Measures(**HARP, triceps=SF((10.0, 11.0))), "Δερματοπτυχή τρικεφάλου")
+    assert third.lines == (("Μετρήσεις", "10,0 · 11,0 mm"),) and third.messages == (m33["third"],)
+    three = sec(man30(), al.Measures(**HARP, triceps=SF((10.0, 11.0, 10.6))), "Δερματοπτυχή τρικεφάλου")
+    assert dict(three.lines)["Τιμή"] == "10,5 mm"
+    odd = sec(man30(), al.Measures(**HARP, triceps=SF((60.0, 60.0))), "Δερματοπτυχή τρικεφάλου")
+    assert odd.messages == (m33["unusual"].replace("[X]", "60,0"),)
+    ok = sec(man30(), al.Measures(**HARP, triceps=SF((60.0, 60.0), confirmed=True)), "Δερματοπτυχή τρικεφάλου")
+    assert dict(ok.lines)["Εκατοστημόριο (ΗΠΑ 2007–2010, 30–39 ετών)"] == "πάνω από το 95ο · αβέβαιη"
+    no_cal = sec(man30(), al.Measures(sf_isak=True, triceps=SF((10.0, 10.0))), "Δερματοπτυχή τρικεφάλου")
+    assert no_cal.warnings and no_cal.warnings[0].startswith("Δαγκάνα:")
+    one = sec(man30(), al.Measures(**HARP, triceps=SF((10.0,))), "Δερματοπτυχή τρικεφάλου")
+    assert one.warnings[0].startswith("Χρειάζονται δύο μετρήσεις") and one.lines == (("Μετρήσεις", "10,0 mm"),)
+    nm = sec(man30(), al.Measures(**HARP, triceps=SF(not_measured=True)), "Δερματοπτυχή τρικεφάλου")
+    assert nm.lines == () and nm.messages == (m33["not_measured"],)
+    assert sec(man30(), al.Measures(**HARP), "Δερματοπτυχή τρικεφάλου") is None
+    assert sec(man30(), al.Measures(calf_skinfold=SF(not_measured=True)), "Δερματοπτυχή γάμπας") is None  # 36: χωρίς μήνυμα
+    normal = man37(birth_date=date(1996, 1, 1), height_cm=178.0, weight_kg=76.0, fat_percent=15.0)
+    assert sec(normal, al.Measures(**HARP, triceps=SF((10.0, 10.0))), "Δερματοπτυχή τρικεφάλου") is None
+
+
+def test_skinfold_indicative_reasons_and_special_cases():
+    m33, m36 = e33.load_data()["messages"], e36.load_data()["messages"]
+    lange = sec(man30(ancestry="3a"), al.Measures(sf_isak=None, sf_caliper="Lange", triceps=SF((10.0, 10.0), left_side=True,
+                                                                                               edema=True)),
+                "Δερματοπτυχή τρικεφάλου")
+    text = " ".join(lange.messages)
+    for reason in ("η μέτρηση δεν έγινε με το πρωτόκολλο ISAK", "δαγκάνα Lange", "μέτρηση στο αριστερό χέρι"):
+        assert reason in text, reason
+    assert m33["ancestry"] in lange.messages and m33["edema"] in lange.messages
+    assert not any(k.startswith("Εκατοστημόριο ανά καταγωγή") for k, v in lange.lines)
+    preg = sec(man37(sex="Γυναίκα", height_cm=165.0, pregnant=True, **PRO),
+               al.Measures(**HARP, triceps=SF((20.0, 20.0)), postpartum_recent=True), "Δερματοπτυχή τρικεφάλου")
+    assert preg.lines == (("Μετρήσεις", "20,0 · 20,0 mm"), ("Τιμή", "20,0 mm")) and preg.messages == (m33["pregnancy"],)
+    post = sec(man37(sex="Γυναίκα", height_cm=165.0, **PRO), al.Measures(**HARP, triceps=SF((20.0, 20.0)),
+                                                                       postpartum_recent=True), "Δερματοπτυχή τρικεφάλου")
+    assert m33["postpartum"] in post.messages
+    child = sec(man37(birth_date=date(2012, 1, 1), **PRO), al.Measures(**HARP, triceps=SF((10.0, 10.0))),
+                "Δερματοπτυχή τρικεφάλου")
+    assert m33["child"] in child.messages and child.table == () and "14 ετών" in child.lines[2][0]
+    heavy = sec(man37(**PRO), al.Measures(**HARP, calf_skinfold=SF((20.0, 20.0)), calf_cm=45.0,
+                                          calf_skinfold_at_max_girth=False, calf_varicose=True),
+                "Δερματοπτυχή γάμπας")
+    assert m36["bmi_30"] in heavy.messages and m36["varicose"] in heavy.messages
+    assert dict(heavy.lines)["Διορθωμένη περιφέρεια γάμπας"] == (
+        "43,00 cm (ενδεικτική: η δερματοπτυχή δεν μετρήθηκε στο ύψος της μέγιστης περιφέρειας)")
+    assert any("μέτρηση στο αριστερό πόδι" in x for x in heavy.messages)  # κιρσοί → αριστερό πόδι
+    ed = sec(man30(), al.Measures(**HARP, calf_skinfold=SF((7.0, 7.0), edema=True)), "Δερματοπτυχή γάμπας")
+    assert m36["edema"] in ed.messages
+
+
+def test_screen_batch10(monkeypatch):
+    vals = {**WOMAN, "level": "Professional", "p_caliper": "Harpenden / Holtain", "p_isak": "Ναι",
+            "p_tri1": 20.0, "p_tri2": 20.4, "p_sub1": 15.0, "p_sub2": 15.2, "p_sup1": 12.0, "p_sup2": 12.2,
+            "p_sup_site": "Ναι", "p_calf1": 15.0, "p_calf2": 15.0, "m_calf": 37.0}
+    f = run_app(monkeypatch, vals)
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors and {"Δερματοπτυχή τρικεφάλου (Στοιχείο 33)", "Δερματοπτυχή υποπλάτιου (Στοιχείο 34)",
+                             "Δερματοπτυχή υπερακάνθιου (Στοιχείο 35)", "Δερματοπτυχή γάμπας (Στοιχείο 36)"} <= set(subs)
+    assert e35.before_message() in f.texts() and e36.before_message() in f.texts()
+    where = {label: g for g, label in f.inputs}
+    assert where["Τρικέφαλος — 1η μέτρηση (mm)"].startswith("6.")
+    for t in ("τρικεφάλου", "υποπλάτιου", "υπερακάνθιου", "γάμπας"):
+        assert any(x.startswith("ⓘ") and t in x for x in f.expanders), t
+    assert any(n == "dataframe" for n, a, k in f.shown)  # πίνακας αθλητών
+    odd = run_app(monkeypatch, {**vals, "p_tri1": 60.0, "p_tri2": 60.0})
+    assert e33.load_data()["messages"]["unusual"].replace("[X]", "60,0") in odd.texts()
+    ok = run_app(monkeypatch, {**vals, "p_tri1": 60.0, "p_tri2": 60.0, "p_tri_ok": True})
+    assert e33.load_data()["messages"]["unusual"].replace("[X]", "60,0") not in ok.texts()
+
+
+def test_screen_batch10_defaults_and_options(monkeypatch):
+    base = {**WOMAN, "level": "Professional", "p_caliper": "Harpenden / Holtain", "p_tri1": 20.0, "p_tri2": 20.0,
+            "p_sup1": 12.0, "p_sup2": 12.0, "p_calf1": 15.0, "p_calf2": 15.0, "m_calf": 37.0}
+    f = run_app(monkeypatch, base)  # προεπιλογές: ISAK «Δεν ξέρω», σημείο υπερακάνθιας «Δεν ξέρω»
+    text = " ".join(f.texts())
+    assert "η μέτρηση δεν έγινε με το πρωτόκολλο ISAK" in text and e35.load_data()["reasons"]["site_unknown"] in text
+    g = run_app(monkeypatch, {**base, "p_isak": "Ναι", "p_sup_site": "Ναι", "p_calf_atmax": False,
+                              "p_calf_varicose": True})
+    text = " ".join(g.texts())
+    assert "η μέτρηση δεν έγινε με το πρωτόκολλο ISAK" not in text and e35.load_data()["reasons"]["site_unknown"] not in text
+    assert e36.load_data()["reasons"]["not_at_max_girth"] in text and e36.load_data()["messages"]["varicose"] in text
+    nm = run_app(monkeypatch, {**WOMAN, "level": "Professional", "p_tri_nm": True})
+    assert e33.load_data()["messages"]["not_measured"] in nm.texts()

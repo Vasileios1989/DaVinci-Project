@@ -78,6 +78,8 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
         biceps = measure_input("Δικέφαλος σφιγμένος (cm)", "m_biceps", "δικέφαλος σφιγμένος")
         fore_rel = measure_input("Πήχης χαλαρός (cm)", "m_fore_rel", "πήχης")
         fore_flx = measure_input("Πήχης σφιγμένος (cm)", "m_fore_flx", "πήχης σφιγμένος")
+        st.caption(al.arm_field_note())
+        arm_injured = st.checkbox("Τραυματισμός ή πρήξιμο στο δεξί χέρι", key="m_arm_injured")
         wrist = measure_input("Καρπός (cm)", "m_wrist", "καρπός")
         thigh = measure_input("Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh", "άνω μηρός")
         thigh18 = measure_input("Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh18", "μηρός")
@@ -96,7 +98,7 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
                     shoulders_cm=shoulders, arm_relaxed_cm=arm_rel, biceps_flexed_cm=biceps,
                     forearm_relaxed_cm=fore_rel, forearm_flexed_cm=fore_flx, wrist_cm=wrist, thigh_cm=thigh18,
                     knee_cm=knee, knee_swollen=swollen, calf_cm=calf, ankle_cm=ankle, leg_edema=edema,
-                    ankle_injured=injured,
+                    ankle_injured=injured, arm_injured=arm_injured,
                     **hydration, **medical)
 
     missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),

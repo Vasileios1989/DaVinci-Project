@@ -1193,3 +1193,122 @@ def test_screen_batch6(monkeypatch):
     assert where["Γάμπα (cm)"].startswith("4.") and where["Αστράγαλος (cm)"].startswith("4.")
     f2 = run_app(monkeypatch, {**WOMAN, "m_ankle": 21.5, "m_ankle_injured": True})
     assert e21.load_data()["messages"]["injury"] in f2.texts() and e20.load_data()["messages"]["edema"] not in f2.texts()
+
+
+# ---- Δόση 7: Στοιχεία 22–25 (λόγοι) ----
+from davinci import element_22 as e22  # noqa: E402
+from davinci import element_23 as e23  # noqa: E402
+from davinci import element_24 as e24  # noqa: E402
+from davinci import element_25 as e25  # noqa: E402
+
+DOC = dict(waist_cm=146.0, hip_cm=142.7, chest_cm=131.5, shoulders_cm=138.0)
+
+
+def test_e22_document_table8():
+    m22 = e22.load_data()["messages"]
+    s = sec(man37(**ATH), al.Measures(**DOC), "Λόγος μέσης / ισχίου")
+    d = dict(s.lines)
+    assert d["Λόγος μέσης / ισχίου"] == "1,02" and d["Ταξινόμηση"] == "Ουσιαστικά αυξημένος κίνδυνος"
+    # έγγραφο 99,0 / 89,1 και 92,1 / 82,9 από στρογγυλεμένο ισχίο (βλ. NOTES, Στοιχεία 11 και 22)· η Μ ίδια
+    assert d["Μέση στα 79,3 kg (λίπος 13,0%)"] == (
+        "κάτω από 88,5 cm (ΛΜΙ: κάτω από 89,0 · μέση/ύψος: κάτω από 88,5 · ισχίο ≈ 98,9)")
+    assert d["Μέση στα 67,8 kg (λίπος 6,0%)"].startswith("κάτω από 82,8 cm (ΛΜΙ: κάτω από 82,8 ·")
+    assert s.messages[0] == m22["U"].replace("είναι Χ,", "είναι 1,02,")
+    assert m22["P"] in s.messages and m22["T"] in s.messages and not s.indicative and "Ηλικία" not in d
+    assert any("κάτω από 89,0 cm" in x for x in s.messages)  # μήνυμα Μ με την πρώτη γραμμή
+
+
+def test_e22_cases():
+    m22 = e22.load_data()["messages"]
+    h = sec(man37(weight_kg=80.0, fat_percent=15.0, ancestry="3a"), al.Measures(waist_cm=80.0, hip_cm=95.0),
+            "Λόγος μέσης / ισχίου")
+    assert dict(h.lines) == {"Λόγος μέσης / ισχίου": "0,84", "Ταξινόμηση": "Κάτω από το όριο του ΠΟΥ"}
+    assert m22["asian"] in h.messages and h.indicative and m22["P"] not in h.messages
+    w = sec(man37(), al.Measures(waist_cm=100.0), "Λόγος μέσης / ισχίου")
+    assert m22["missing"] in w.messages and "Λόγος μέσης / ισχίου" not in dict(w.lines)
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(waist_cm=70.0, hip_cm=80.0), "Λόγος μέσης / ισχίου")
+    assert minor.lines == (("Λόγος μέσης / ισχίου", "0,88"),) and minor.messages == (m22["record_only"],)
+    old = sec(man37(birth_date=date(1940, 1, 1), weight_kg=80.0, fat_percent=15.0),
+              al.Measures(waist_cm=90.0, hip_cm=100.0), "Λόγος μέσης / ισχίου")
+    assert dict(old.lines)["Ηλικία"] == "Εκτός δεδομένων αναφοράς"
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Λόγος μέσης / ισχίου") is None
+
+
+def test_e23_document_table11():
+    m23 = e23.load_data()["messages"]
+    s = sec(man37(**ATH), al.Measures(**DOC), "Λόγος στήθους / μέσης")
+    d = dict(s.lines)
+    assert d["Λόγος στήθους / μέσης"] == "0,90" and d["Εκατοστημόριο ANSUR II"] == "κάτω από το 5ο"
+    assert d["Ελάχιστος λόγος στα 79,3 kg"] == "≥ 1,16 (στήθος ≈ 102,9 cm · μέση κάτω από 88,5 cm)"
+    assert d["Ελάχιστος λόγος στα 67,8 kg"] == "≥ 1,08 (στήθος ≈ 95,2 cm · μέση κάτω από 88,5 cm)"
+    assert s.messages[0] == m23["A"].replace("Χο", "κάτω από το 5ο") and m23["P"] in s.messages
+    assert any("τουλάχιστον 1,16." in x for x in s.messages)
+
+
+def test_e23_women_no_target_rows_and_cases():
+    m23 = e23.load_data()["messages"]
+    w = sec(man37(sex="Γυναίκα", height_cm=165.0, weight_kg=90.0, fat_percent=40.0),
+            al.Measures(chest_cm=100.0, waist_cm=90.0), "Λόγος στήθους / μέσης")
+    assert [k for k, v in w.lines] == ["Λόγος στήθους / μέσης", "Εκατοστημόριο ANSUR II"]  # Πίνακας 7: χωρίς Ε
+    assert m23["G"] in w.messages and not any("τουλάχιστον" in x for x in w.messages)
+    one = sec(man37(), al.Measures(chest_cm=110.0), "Λόγος στήθους / μέσης")
+    assert m23["missing"] in one.messages and "Εκατοστημόριο ANSUR II" not in dict(one.lines)
+    nd = sec(man37(ancestry="5", birth_date=date(1960, 1, 1)), al.Measures(chest_cm=120.0, waist_cm=110.0),
+             "Λόγος στήθους / μέσης")
+    assert m23["ancestry_4_5"] in nd.messages and m23["age_59"] in nd.messages and nd.indicative
+
+
+def test_e24_document_table12():
+    m24 = e24.load_data()["messages"]
+    s = sec(man37(**ATH), al.Measures(**DOC), "Λόγος ώμων / μέσης")
+    d = dict(s.lines)
+    assert d["Λόγος ώμων / μέσης"] == "0,95" and d["Εκατοστημόριο ANSUR II"] == "κάτω από το 5ο"
+    # έγγραφο 114,7 / 1,30 με τον όρο ηλικίας του 14 (βλ. NOTES, Στοιχεία 14 και 24)
+    assert d["Ελάχιστος λόγος στα 79,3 kg"] == "≥ 1,31 (ώμοι ≈ 116,3 cm · μέση κάτω από 88,5 cm)"
+    assert d["Ελάχιστος λόγος στα 67,8 kg"] == "≥ 1,25 (ώμοι ≈ 110,9 cm · μέση κάτω από 88,5 cm)"
+    for k in ("T", "P"):
+        assert m24[k] in s.messages
+    w = sec(man37(sex="Γυναίκα", height_cm=165.0, weight_kg=90.0, fat_percent=40.0),
+            al.Measures(shoulders_cm=105.0, waist_cm=90.0), "Λόγος ώμων / μέσης")
+    assert any(k.startswith("Ελάχιστος λόγος") for k, v in w.lines) and m24["G"] in w.messages  # Πίνακας 8: Ε
+
+
+def test_e25_document_table10_and_cases():
+    m25 = e25.load_data()["messages"]
+    s = sec(man37(**ATH), al.Measures(biceps_flexed_cm=40.0, forearm_flexed_cm=33.0), "Λόγος πήχη / δικεφάλου")
+    d = dict(s.lines)
+    assert d["Λόγος πήχη / δικεφάλου (σφιγμένοι)"] == "0,83" and d["Εκατοστημόριο ANSUR II"] == "5ο–25ο"
+    assert d["Αναμενόμενος λόγος στα 79,3 kg"] == "≈ 0,88 (πήχης 30,0 cm · δικέφαλος 34,1 cm)"
+    assert d["Αναμενόμενος λόγος στα 67,8 kg"] == "≈ 0,90 (πήχης 28,3 cm · δικέφαλος 31,3 cm)"
+    assert m25["L"] in s.messages and m25["P"] in s.messages and m25["T"] not in s.messages
+    assert al.arm_field_note() == m25["T"]
+    relaxed = sec(man37(), al.Measures(arm_relaxed_cm=40.0, forearm_relaxed_cm=32.6), "Λόγος πήχη / δικεφάλου")
+    assert m25["missing"] in relaxed.messages and "Εκατοστημόριο ANSUR II" not in dict(relaxed.lines)
+    inj = sec(man37(), al.Measures(biceps_flexed_cm=40.0, forearm_flexed_cm=33.0, arm_injured=True),
+              "Λόγος πήχη / δικεφάλου")
+    assert inj.lines == (("Λόγος πήχη / δικεφάλου (σφιγμένοι)", "0,83"),) and inj.messages == (m25["injury"],)
+    assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Λόγος πήχη / δικεφάλου") is None
+
+
+def test_screen_batch7(monkeypatch):
+    vals = {**WOMAN, "m_waist": 90.0, "m_hip": 105.0, "m_chest": 100.0, "m_shoulders": 105.0,
+            "m_biceps": 31.0, "m_fore_flx": 26.0}
+    f = run_app(monkeypatch, vals)
+    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    assert not f.errors and {"Λόγος μέσης / ισχίου (Στοιχείο 22)", "Λόγος στήθους / μέσης (Στοιχείο 23)",
+                             "Λόγος ώμων / μέσης (Στοιχείο 24)", "Λόγος πήχη / δικεφάλου (Στοιχείο 25)"} <= set(subs)
+    assert e25.load_data()["messages"]["T"] in f.texts()  # δίπλα στα πεδία
+    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    assert "**Λόγος μέσης / ισχίου:** 0,86" in md and "**Ταξινόμηση:** Ουσιαστικά αυξημένος κίνδυνος" in md
+    f2 = run_app(monkeypatch, {**vals, "m_arm_injured": True})
+    assert e25.load_data()["messages"]["injury"] in f2.texts()
+
+
+def test_ratios_shown_without_measurements_when_targets_exist():
+    m22, m24 = e22.load_data()["messages"], e24.load_data()["messages"]
+    s = sec(man37(), al.Measures(), "Λόγος μέσης / ισχίου")  # Υγεία, στόχος 81,5 kg: μόνο η πληροφορία μέσης
+    assert m22["missing"] in s.messages and s.lines[0][0].startswith("Μέση στα 81,5 kg")
+    one = sec(man37(), al.Measures(shoulders_cm=130.0), "Λόγος ώμων / μέσης")
+    assert m24["missing"] in one.messages and "Εκατοστημόριο ANSUR II" not in dict(one.lines)
+    lean = sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(shoulders_cm=120.0), "Λόγος ώμων / μέσης")
+    assert lean.lines == () and lean.messages[0] == m24["missing"]  # χωρίς στόχο, μόνο ένα πεδίο

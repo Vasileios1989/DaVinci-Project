@@ -319,6 +319,7 @@ class Measures:
     ankle_cm: float | None = None
     leg_edema: bool = False  # πρήξιμο (οίδημα) στα πόδια ή στον αστράγαλο (Στοιχεία 20, 21)
     ankle_injured: bool = False
+    arm_injured: bool = False  # τραυματισμός ή πρήξιμο στο δεξί χέρι (Στοιχείο 25)
 
 
 @dataclass(frozen=True)
@@ -784,6 +785,92 @@ def section_ankle(m: Measures, user: e01.UserCategories, weight_kg: float, fat_p
     return Section("Αστράγαλος (Στοιχείο 21)", tuple(lines), _dedupe(msgs), r.indicative)
 
 
+def section_whr(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 22: ταξινόμηση με το όριο του ΠΟΥ (Πίνακας 2)· πληροφορία μέσης ανά βάρος-στόχο (Πίνακας 5)."""
+    from davinci import element_22 as e22
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e22.assess(m.waist_cm, m.hip_cm, user, [(p.weight_kg, p.target_fat_percent) for p in pts])
+    if m.waist_cm is None and m.hip_cm is None and not r.rows:
+        return None
+    lines = []
+    if r.ratio is not None:
+        lines.append(("Λόγος μέσης / ισχίου", _n(r.ratio, 2)))
+    if r.category:
+        lines.append(("Ταξινόμηση", r.category))
+    for w in r.rows:
+        lines.append((f"Μέση στα {_n(w.target_weight_kg)} kg (λίπος {_n(w.target_fat_percent)}%)",
+                      f"κάτω από {_n(w.waist_for_both_cm)} cm (ΛΜΙ: κάτω από {_n(w.waist_for_whr_cm)} · "
+                      f"μέση/ύψος: κάτω από {_n(w.waist_for_whtr_cm)} · ισχίο ≈ {_n(w.expected_hip_cm)})"))
+    if r.out_of_reference_label:
+        lines.append(("Ηλικία", r.out_of_reference_label))
+    return Section("Λόγος μέσης / ισχίου (Στοιχείο 22)", tuple(lines), _dedupe(r.messages), r.indicative)
+
+
+def _percentile_section(title, label, r, d, user, row_line, field_note=None) -> Section:
+    """Στοιχεία 23–25: τιμή, ζώνη εκατοστημορίου ANSUR II και γραμμές ανά βάρος-στόχο, μόνο όταν ο πίνακας
+    «Τι εμφανίζεται» του εγγράφου έχει το μήνυμα Ε για το φύλο και το προφίλ."""
+    lines = []
+    if r.ratio is not None:
+        lines.append((label, _n(r.ratio, 2)))
+    if r.band:
+        lines.append(("Εκατοστημόριο ANSUR II", r.band))
+    group = "athletic" if user.profile in d["show"]["athletic_profiles"] else "health"
+    if "E" in d["show"][user.sex][group]:
+        lines += [row_line(x) for x in r.rows]
+    msgs = [x for x in r.messages if x != field_note]
+    return Section(title, tuple(lines), _dedupe(msgs), r.indicative)
+
+
+def section_chest_waist(m: Measures, user: e01.UserCategories, weight_kg: float, fat_percent: float) -> Section | None:
+    """Στοιχείο 23: χωρίς όριο και στόχο· εκατοστημόριο και ελάχιστος λόγος στο βάρος-στόχο (Πίνακες 5, 7, 8)."""
+    from davinci import element_23 as e23
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e23.assess(m.chest_cm, m.waist_cm, user, [p.weight_kg for p in pts])
+    if m.chest_cm is None and m.waist_cm is None and not r.rows:
+        return None
+    return _percentile_section(
+        "Λόγος στήθους / μέσης (Στοιχείο 23)", "Λόγος στήθους / μέσης", r, e23.load_data(), user,
+        lambda x: (f"Ελάχιστος λόγος στα {_n(x.weight_kg)} kg",
+                   f"≥ {_n(x.ratio, 2)} (στήθος ≈ {_n(x.numerator_cm)} cm · μέση κάτω από {_n(x.denominator_cm)} cm)"))
+
+
+def section_shoulders_waist(m: Measures, user: e01.UserCategories, weight_kg: float,
+                            fat_percent: float) -> Section | None:
+    """Στοιχείο 24: χωρίς όριο και στόχο· εκατοστημόριο και ελάχιστος λόγος στο βάρος-στόχο (Πίνακες 6, 8, 9)."""
+    from davinci import element_24 as e24
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e24.assess(m.shoulders_cm, m.waist_cm, user, [p.weight_kg for p in pts])
+    if m.shoulders_cm is None and m.waist_cm is None and not r.rows:
+        return None
+    return _percentile_section(
+        "Λόγος ώμων / μέσης (Στοιχείο 24)", "Λόγος ώμων / μέσης", r, e24.load_data(), user,
+        lambda x: (f"Ελάχιστος λόγος στα {_n(x.weight_kg)} kg",
+                   f"≥ {_n(x.ratio, 2)} (ώμοι ≈ {_n(x.numerator_cm)} cm · μέση κάτω από {_n(x.denominator_cm)} cm)"))
+
+
+def arm_field_note() -> str:
+    """Στοιχείο 25, μήνυμα Τ: «Πάντα, δίπλα στα πεδία καταχώρησης»."""
+    from davinci import element_25 as e25
+    return e25.load_data()["messages"]["T"]
+
+
+def section_forearm_biceps(m: Measures, user: e01.UserCategories, weight_kg: float,
+                           fat_percent: float) -> Section | None:
+    """Στοιχείο 25: μόνο σφιγμένες τιμές· εκατοστημόριο και αναμενόμενος λόγος στο βάρος-στόχο (Πίνακες 3, 6, 7).
+    Το μήνυμα Τ εμφανίζεται δίπλα στα πεδία, όχι εδώ."""
+    from davinci import element_25 as e25
+    pts = _targets(weight_kg, fat_percent, user)
+    r = e25.assess(m.forearm_flexed_cm, m.biceps_flexed_cm, user, [p.weight_kg for p in pts],
+                   injured_or_swollen=m.arm_injured)
+    if m.forearm_flexed_cm is None and m.biceps_flexed_cm is None and not r.rows:
+        return None
+    return _percentile_section(
+        "Λόγος πήχη / δικεφάλου (Στοιχείο 25)", "Λόγος πήχη / δικεφάλου (σφιγμένοι)", r, e25.load_data(), user,
+        lambda x: (f"Αναμενόμενος λόγος στα {_n(x.weight_kg)} kg",
+                   f"≈ {_n(x.ratio, 2)} (πήχης {_n(x.numerator_cm)} cm · δικέφαλος {_n(x.denominator_cm)} cm)"),
+        field_note=arm_field_note())
+
+
 def guide_extra(field: str, sex: str) -> tuple[str, ...]:
     """Επιπλέον κείμενο στο ⓘ ανά φύλο (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
     from davinci import element_13 as e13
@@ -805,7 +892,9 @@ def measurement_sections(inp: PlanInput, m: Measures) -> tuple[tuple[Section, ..
                section_neck(m, user, f), section_chest(m, user, w, f), section_shoulders(m, user, w, f),
                section_arm(m, user, w, f), section_forearm(m, user, w, f), section_wrist(m, user, w),
                section_thigh(m, user, w, f), section_knee(m, user, w, f), section_calf(m, user, w, f),
-               section_ankle(m, user, w, f), section_visceral(m, user, w),
+               section_ankle(m, user, w, f), section_whr(m, user, w, f), section_chest_waist(m, user, w, f),
+               section_shoulders_waist(m, user, w, f), section_forearm_biceps(m, user, w, f),
+               section_visceral(m, user, w),
                section_muscle(m, user, w, f), section_water(m, user, w, f), section_hydration(m, user),
                section_bone(m, user, w, f), section_ratios(m, user, w, f, muscle, bone),
                section_analysis(m, user, w, f, muscle, bone)]

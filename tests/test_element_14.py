@@ -25,19 +25,25 @@ def target_weight(fat):
     return e03._point(138.9, 60 / 138.9 * 100, fat, u(resistance_training=True)).weight_kg
 
 
-# --- ΑΣΥΜΦΩΝΙΑ ΣΤΟ ΕΓΓΡΑΦΟ: Πίνακας 3 (τύπος) έναντι Πίνακα 9 (παράδειγμα) -----------
-# Ο Πίνακας 3 γράφει ότι ο όρος ηλικίας (−0,0004/έτος) παραλείπεται. Οι τιμές του Πίνακα 9
-# βγαίνουν όμως ΜΕ τον όρο ηλικίας: τύπος × e^(−0,0004 × 37) ≈ −1,5%. Ο κώδικας ακολουθεί
-# τον Πίνακα 3. Η διόρθωση θέλει τα αρχεία ANSUR II και Συμπλήρωμα στο 14.
-@pytest.mark.parametrize("fat, formula, doc", [
-    ("today", 138.1, 136.1), (19.9, 120.9, 119.2), (13.0, 116.4, 114.7),
-    (6.0, 110.9, 109.3), (16.0, 118.4, 116.6), (10.0, 114.2, 112.5),
+# --- Πίνακας 9 του εγγράφου (Συμπλήρωμα Α, 10/11/2026) ---------------------------------
+# Οι a και b του Πίνακα 3 βγαίνουν από το μοντέλο ΜΕ ηλικία (επανυπολογισμός από τα αρχεία ANSUR II,
+# tools/check_ansur_models.py)· ο όρος ηλικίας εφαρμόζεται, οπότε ο κώδικας δίνει τον Πίνακα 9 ακριβώς.
+# Πριν από τη διόρθωση ο κώδικας έδινε 138,1 · 120,9 · 116,4 · 110,9 · 118,4 · 114,2 cm.
+@pytest.mark.parametrize("fat, doc, rng", [
+    ("today", 136.1, None), (19.9, 119.2, (115.8, 122.6)), (13.0, 114.7, (111.4, 118.0)),
+    (6.0, 109.3, (106.3, 112.5)), (16.0, 116.6, (113.4, 120.0)), (10.0, 112.5, (109.4, 115.8)),
 ])
-def test_formula_vs_document_table_9(fat, formula, doc):
+def test_document_table_9(fat, doc, rng):
     w = 139.1 if fat == "today" else round(target_weight(fat), 1)
     e = e14.estimate(w, u())
-    assert r1(e.value_cm) == formula
-    assert r1(e.value_cm * math.exp(-0.0004 * 37)) == doc  # εξήγηση της διαφοράς
+    assert r1(e.value_cm) == doc
+    if rng:
+        assert abs(r1(e.range_cm[0]) - rng[0]) <= 0.1 + 1e-9 and abs(r1(e.range_cm[1]) - rng[1]) <= 0.1 + 1e-9
+
+
+def test_today_measured_plus_1_4_percent():
+    e = e14.estimate(139.1, u())
+    assert r1((138.0 / e.value_cm - 1) * 100) == 1.4  # Πίνακας 9: «+1,4%, μέσα στο σφάλμα»
 
 
 def test_today_measured_within_error():
@@ -48,14 +54,19 @@ def test_today_measured_within_error():
 # --- Τύποι ------------------------------------------------------------------------
 def test_formula_women():
     user = u(sex="Γυναίκα", height_cm=165)
-    expected = math.exp(4.9025 + 0.2886 * math.log(65 / 165))
+    expected = math.exp(4.9025 + 0.2886 * math.log(65 / 165) - 0.0006 * 37)
     e = e14.estimate(65, user)
     assert e.value_cm == pytest.approx(expected)
     assert e.range_cm == pytest.approx((expected * math.exp(-0.0299), expected * math.exp(0.0299)))
 
 
-def test_no_age_effect():
-    assert e14.estimate(80, u(age=20)).value_cm == e14.estimate(80, u(age=55)).value_cm
+def test_age_term():
+    """−0,0004 ανά έτος στους άνδρες, −0,0006 στις γυναίκες (Συμπλήρωμα Α)."""
+    assert e14.estimate(80, u(age=55)).value_cm == pytest.approx(e14.estimate(80, u(age=20)).value_cm
+                                                                 * math.exp(-0.0004 * 35))
+    w = dict(sex="Γυναίκα", height_cm=165)
+    assert e14.estimate(65, u(age=50, **w)).value_cm == pytest.approx(e14.estimate(65, u(age=20, **w)).value_cm
+                                                                      * math.exp(-0.0006 * 30))
 
 
 @pytest.mark.parametrize("anc, delta", [("1", 0), ("2", 0.0131), ("3a", -0.0020), ("3b", -0.0020),

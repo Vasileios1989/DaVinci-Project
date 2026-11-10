@@ -200,7 +200,6 @@ def test_e23_k0():
 # Το έγγραφο 24 πήρε τους ώμους από τον τύπο του Πίνακα 9 του Στοιχείου 14, που περιέχει όρο ηλικίας
 # (−0,0004 × ηλικία). Ο κώδικας ακολουθεί τον Πίνακα 3 του Στοιχείου 14 (χωρίς όρο ηλικίας) — βλ. NOTES.
 DOC24 = {19.9: (119.2, 1.35), 13: (114.7, 1.30), 6: (109.3, 1.24), 16: (116.6, 1.32), 10: (112.5, 1.27)}
-CODE24 = {19.9: (120.9, 1.37), 13: (116.3, 1.31), 6: (110.9, 1.25), 16: (118.4, 1.34), 10: (114.2, 1.29)}
 
 
 def check24(weight, height, age, sex="Άνδρας"):
@@ -212,23 +211,19 @@ def test_e24_today_below_5th():
     res = e24.assess(138.0, 146, u(profile="Αθλητικό"), [target_weight(13)])
     assert res.ratio == 0.95 and res.band == "κάτω από το 5ο"
     assert res.messages[0] == M24["A"].replace("Χο", "κάτω από το 5ο")
-    assert "(116,3 cm)" in res.messages[1] and "τουλάχιστον 1,31." in res.messages[1]
+    # Συμπλήρωμα Α του 14 (όρος ηλικίας): 114,6 cm στο ακριβές βάρος-στόχο 79,25 kg (έγγραφο: 114,7 στα 79,3)
+    assert "(114,6 cm)" in res.messages[1] and "τουλάχιστον 1,30." in res.messages[1]
     assert res.messages[2:] == (M24["T"], M24["P"])
 
 
 @pytest.mark.parametrize("fat", CASES)
-def test_e24_table12_code_values(fat):
+def test_e24_table12_document_values(fat):
+    # Μετά το Συμπλήρωμα Α του 14 ο κώδικας δίνει τον Πίνακα 12· διαφορές έως 0,1 cm / 0,01 μόνο από
+    # το ακριβές βάρος-στόχο και τη στρογγύλευση του εγγράφου (λόγος από στρογγυλεμένους ώμους).
     row = e24.target_rows(u(), [target_weight(fat)])[0]
-    assert (r(row.numerator_cm, 1), r(row.ratio, 2)) == CODE24[fat]
-
-
-@pytest.mark.parametrize("fat", CASES)
-def test_e24_document_values_come_from_the_age_term(fat):
-    # Με τον όρο ηλικίας του Πίνακα 9 (Στοιχείο 14) αναπαράγονται οι τιμές του εγγράφου 24.
     shoulders, lam = DOC24[fat]
-    with_age = e14.estimate(target_weight(fat), u()).value_cm * math.exp(-0.0004 * 37)
-    assert close(with_age, shoulders)
-    assert abs(r(with_age / 88.5, 2) - lam) <= 0.01 + 1e-9
+    assert close(row.numerator_cm, shoulders)
+    assert abs(r(row.ratio, 2) - lam) <= 0.01 + 1e-9
 
 
 def test_e24_check_column():

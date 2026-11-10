@@ -1,0 +1,7 @@
+# Εμφάνιση της εφαρμογής (σύμβαση συστήματος): σκούρο θέμα με κάρτες και πορτοκαλί έμφαση.
+[theme]
+base = "dark"
+primaryColor = "#FF7043"
+backgroundColor = "#14172B"
+secondaryBackgroundColor = "#262B42"
+textColor = "#F2F3F7"

@@ -219,8 +219,29 @@ def show_section(sec: al.Section) -> None:
         st.warning("Ενδεικτική")
     for label, value in sec.lines:
         st.markdown(f"**{label}:** {value}")
+    if sec.table:
+        head, *body = sec.table
+        st.dataframe([dict(zip(head, r)) for r in body], hide_index=True)
+    for w in sec.warnings:
+        st.warning(w)
     for m in sec.messages:
         st.write(m)
+
+
+def hydration_inputs() -> dict:
+    """Στοιχείο 08, Πίνακας 7: καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό."""
+    with st.expander("Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"):
+        st.caption("Καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό.")
+        prev = [st.number_input(f"Πρωινό βάρος πριν από {d} {'ημέρα' if d == 1 else 'ημέρες'} (kg)", min_value=0.1,
+                                value=None, step=0.1, format="%.1f", key=f"m_prev{d}") for d in (3, 2, 1)]
+        today = st.number_input("Πρωινό βάρος σήμερα (kg)", min_value=0.1, value=None, step=0.1, format="%.1f",
+                                key="m_today")
+        urine = st.selectbox("Χρώμα πρώτων πρωινών ούρων (κλίμακα 1–8)", [None, *range(1, 9)], key="m_urine",
+                             format_func=lambda x: "Δεν καταγράφηκε" if x is None else str(x))
+        thirst = st.number_input("Δίψα (βαθμός στην κλίμακα)", min_value=0.0, value=None, step=1.0, format="%.0f",
+                                 key="m_thirst")
+    return dict(previous_morning_weights=tuple(x for x in prev if x is not None), today_morning_weight=today,
+                urine_color=urine, thirst=thirst)
 
 
 def tab_measures(inp: al.PlanInput) -> None:
@@ -232,6 +253,9 @@ def tab_measures(inp: al.PlanInput) -> None:
         scale_visceral_level=measure_input("Σπλαχνικό λίπος — τιμή ζυγαριάς (χωρίς μονάδα)", "m_visceral",
                                            "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0),
         scale_muscle_percent=measure_input("Μύες % (ζυγαριά)", "m_muscle", "μύες % (ζυγαριά)", max_value=99.9),
+        scale_water_percent=measure_input("Υγρά % (ζυγαριά)", "m_water", "υγρά % (ζυγαριά)", max_value=99.9),
+        scale_bone_percent=measure_input("Οστά % (ζυγαριά)", "m_bone", "οστά % (ζυγαριά)", max_value=99.9),
+        **hydration_inputs(),
     )
     sections, errors = al.measurement_sections(inp, m)
     for e in errors:

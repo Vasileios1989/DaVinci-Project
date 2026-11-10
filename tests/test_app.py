@@ -533,3 +533,164 @@ def test_e07_target_carries_element03_messages():
     assert m3["fat_gain"] in s.messages and s.indicative and "Ενδεικτικός στόχος μυών" in dict(s.lines)
     plain = sec(man37(), al.Measures(scale_muscle_percent=30.0), "Σκελετικοί")
     assert not plain.indicative and m3["fat_gain"] not in plain.messages
+
+
+# ================================================================ Δόση 2: 03 (ΔΑΜ, ανάλυση), 08, 09, 10
+from davinci import element_08 as e08  # noqa: E402
+from davinci import element_09 as e09  # noqa: E402
+from davinci import element_10 as e10  # noqa: E402
+
+SCALE = dict(scale_muscle_percent=30.0, scale_water_percent=39.2, scale_bone_percent=1.9)
+
+
+def man139(**kw):  # το παράδειγμα των εγγράφων 07–10 (22/09/2026, ζυγαριά)
+    return man37(weight_kg=139.1, fat_percent=42.9, **kw)
+
+
+def lines(s):
+    return dict(s.lines)
+
+
+def test_e03_ffmi_document_examples():
+    s = sec(man37(profile="Αθλητικό", resistance_training=True), al.Measures(), "Άλιπη μάζα")
+    d = lines(s)
+    assert d["Άλιπη μάζα"] == "78,9 kg" and d["Κανονικοποιημένος ΔΑΜ"] == "25,4"  # Πίνακας 7: 25,4
+    assert d["Άλιπη μάζα-στόχος (Φάση 1)"] == "≈ 69,0 kg (−9,9) → ≈ 63,7 kg (−15,2)"  # Πίνακες 7, Β2
+    m3 = e03.load_data()
+    assert d["Ένδειξη"] == f'{m3["indications_men"][0]["label"]} · {m3["indication_high_with_excess_fat"]}'
+    assert "Φυσιολογικό εύρος (πληροφορία)" not in d  # μόνο προφίλ Υγεία
+
+
+def test_e03_ffmi_health_reference_range_and_minor():
+    s = sec(man139(), al.Measures(), "Άλιπη μάζα")
+    hr = e03.load_data()["health_reference_range"]
+    assert lines(s)["Φυσιολογικό εύρος (πληροφορία)"] == f'16,7 – 19,8 · {hr["labels"]["above"]}'  # Πίνακας Ε4
+    assert hr["messages"]["high_with_bmi_25"] in s.messages and hr["messages"]["activity"] in s.messages
+    minor = sec(man37(birth_date=date(2012, 1, 1), weight_kg=60.0, fat_percent=30.0), al.Measures(), "Άλιπη μάζα")
+    assert [k for k, _ in minor.lines] == ["Άλιπη μάζα", "ΔΑΜ", "Κανονικοποιημένος ΔΑΜ"] and minor.messages == ()
+    woman = sec(man37(sex="Γυναίκα", weight_kg=70.0, fat_percent=30.0), al.Measures(), "Άλιπη μάζα")
+    assert "Κανονικοποιημένος ΔΑΜ" not in lines(woman)
+
+
+def test_e08_document_table12():
+    s = sec(man139(), al.Measures(**SCALE), "Υγρά")
+    d, m8 = lines(s), e08.load_data()["messages"]
+    assert d["Υγρά"] == "54,5 kg (ζυγαριά)" and d["Αναλογία νερού / άλιπη μάζα"] == "0,687 — Ασυνήθιστη αναλογία"
+    assert d["% του βάρους (πληροφορία)"] == "39,2%" and s.indicative
+    assert [m8["scale_no_hydration"], m8["bmi_out_of_range"], m8["unusual_ratio"]] == list(s.messages[:3])
+    assert d["Ενδεικτικός στόχος υγρών"].startswith("≈ ")  # Υγεία, λίπος πάνω από το εύρος: υπάρχει στόχος
+    t = sec(man139(profile="Αθλητικό", resistance_training=True), al.Measures(**SCALE), "Υγρά")
+    pts = e03.weight_target(139.1, 42.9, al._user(man139(profile="Αθλητικό", resistance_training=True))).points
+    from davinci.fmt import num
+    assert lines(t)["Ενδεικτικός στόχος υγρών"] == " → ".join(f"≈ {num(0.73 * p.ffm_kg)} kg" for p in pts)
+    assert m8["target"] in t.messages
+
+
+def test_e08_target_and_computed_water():
+    s = sec(man37(weight_kg=80.0, fat_percent=30.0), al.Measures(), "Υγρά")
+    d, m8 = lines(s), e08.load_data()["messages"]
+    assert d["Υγρά"].endswith("(υπολογισμένη)") and d["Αναλογία νερού / άλιπη μάζα"].startswith("0,730")
+    assert m8["computed"] in s.messages and d["Ενδεικτικός στόχος υγρών"].startswith("≈ ")
+    old = sec(man37(birth_date=date(1940, 1, 1), weight_kg=70.0, fat_percent=25.0), al.Measures(), "Υγρά")
+    assert lines(old)["Ηλικία"] == "Εκτός δεδομένων αναφοράς"
+
+
+def test_e08_hydration():
+    m8 = e08.load_data()["messages"]
+    none = sec(man37(), al.Measures(), "Ενυδάτωση")
+    assert none.lines == () and none.messages == (m8["baseline_missing"],)
+    full = sec(man37(), al.Measures(previous_morning_weights=(100.0, 100.0, 100.0), today_morning_weight=98.0,
+                                    urine_color=6, thirst=5.0), "Ενυδάτωση")
+    assert lines(full) == {"Ενυδάτωση (Βάρος–Ούρα–Δίψα)": "Πιθανή αφυδάτωση",
+                           "Θετικές ενδείξεις": "3 από 3 (Βάρος, Ούρα, Δίψα)"}
+    part = sec(man37(), al.Measures(urine_color=3), "Ενυδάτωση")
+    assert lines(part)["Θετικές ενδείξεις"] == "0 από 1 (Ούρα)" and part.messages == (m8["baseline_missing"],)
+    old = sec(man37(birth_date=date(1950, 1, 1)), al.Measures(urine_color=7), "Ενυδάτωση")
+    assert old.lines == () and old.messages == (m8["age_60_no_blood"],)
+    minor_inp = man37(birth_date=date(2012, 1, 1))
+    assert e08.assess_hydration(al._user(minor_inp)).messages == (m8["minor"],)
+    assert m8["minor"] in sec(minor_inp, al.Measures(), "Υγρά").messages  # ίδιο μήνυμα: εμφανίζεται μία φορά
+    assert sec(minor_inp, al.Measures(), "Ενυδάτωση").messages == ()
+
+
+def test_e09_document_table11_and_typical():
+    m9 = e09.load_data()["messages"]
+    s = sec(man139(), al.Measures(**SCALE), "Οστά")
+    assert lines(s) == {"Οστικά μέταλλα": "2,6 kg (Εκτίμηση ζυγαριάς άγνωστης ακρίβειας)",
+                        "% της άλιπης μάζας": "3,3%", "% του βάρους (πληροφορία)": "1,9%"}
+    assert s.messages == (m9["scale"], m9["target"], m9["weight_loss"], m9["no_dxa"])
+    t = sec(man139(), al.Measures(), "Οστά")
+    assert lines(t)["Οστικά μέταλλα"] == "≈ 4,5 kg (Τυπική τιμή)"
+    assert m9["typical"].replace("[X]", "4,5").replace("[Y]", "79,4") in t.messages
+    maint = sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Οστά")
+    assert m9["weight_loss"] not in maint.messages and m9["target"] in maint.messages
+    for p in (man37(sex="Γυναίκα", breastfeeding=True, weight_kg=70.0, fat_percent=35.0),
+              man37(birth_date=date(2012, 1, 1))):
+        x = sec(p, al.Measures(), "Οστά")
+        assert m9["target"] not in x.messages and m9["weight_loss"] not in x.messages
+
+
+def test_e10_document_tables_7_8():
+    m10 = e10.load_data()["messages"]
+    s = sec(man139(profile="Αθλητικό"), al.Measures(**SCALE), "Λόγοι")
+    assert lines(s) == {"Λόγος άλιπης / λίπους": "1,33", "Σύγκριση με το όριο (χωρίς οστά)": "1,29",
+                        "Ένδειξη": "Αυξημένος μεταβολικός κίνδυνος", "Λόγος μυών / λίπους": "0,70",
+                        "Στόχος άλιπης / λίπους (προφίλ)": "6,7 – 15,7", "Στόχος μυών / λίπους (προφίλ)": "3,5 – 8,2"}
+    assert s.messages == (m10["below_threshold"],) and s.indicative
+    h = sec(man139(), al.Measures(), "Λόγοι")  # χωρίς οστά ζυγαριάς: όχι η τυπική τιμή
+    d = lines(h)
+    assert "Σύγκριση με το όριο (χωρίς οστά)" not in d and d["Στόχος άλιπης / λίπους (προφίλ)"] == "4,0 – 11,5"
+    assert m10["no_bone"] in h.messages
+    old = sec(man37(birth_date=date(1955, 1, 1), weight_kg=80.0, fat_percent=25.0), al.Measures(), "Λόγοι")
+    assert m10["age_65"] in old.messages and "Ένδειξη" not in lines(old)
+    minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(), "Λόγοι")
+    assert "Στόχος άλιπης / λίπους (προφίλ)" not in lines(minor) and m10["minor"] in minor.messages
+
+
+def test_e10_muscle_ratio_needs_muscle():
+    s = sec(man37(), al.Measures(), "Λόγοι")  # ΔΜΣ ≥ 30 χωρίς ζυγαριά → καμία τιμή μυών (Στοιχείο 07)
+    assert "Λόγος μυών / λίπους" not in lines(s) and e10.load_data()["messages"]["no_muscle"] in s.messages
+
+
+def test_e03_analysis_document_table_g2():
+    s = sec(man139(), al.Measures(**SCALE), "Ανάλυση")
+    assert s.table == (
+        ("Γραμμή", "kg", "% άλιπης", "% βάρους"), ("Άλιπη μάζα", "79,4", "100,0%", "57,1%"),
+        ("Α. Από τι υλικό", "", "", ""),
+        ("Νερό (υγρά)", "54,5", "68,7%", "39,2%"), ("Ξηρή άλιπη μάζα", "24,9", "31,3%", "17,9%"),
+        ("Οστικά μέταλλα", "2,6", "3,3%", "1,9%"), ("Λοιπά", "22,3", "28,0%", "16,0%"),
+        ("Πρωτεΐνη (τυπική τιμή)", "≈ 15,9", "20,0%", "11,4%"), ("Γλυκογόνο (τυπική τιμή)", "≈ 0,7", "0,9%", "0,5%"),
+        ("Άλλα μέταλλα (τυπική τιμή)", "≈ 1,0", "1,2%", "0,7%"), ("Διαφορά", "4,7", "5,9%", "3,4%"),
+        ("Β. Από ποιους ιστούς", "", "", ""), ("Σκελετικοί μύες", "41,7", "52,5%", "30,0%"),
+        ("Ξηροί μύες (εκτίμηση)", "≈ 8,3", "10,5%", "6,0%"), ("Λοιποί ιστοί", "37,7", "47,5%", "27,1%"))
+    g = e03.load_data()["dry_mass"]
+    assert len(s.warnings) == 1 and s.warnings[0].startswith("Διαφορά 4,7 kg") and "0,687" in s.warnings[0]
+    assert e03.load_data()["analysis"]["note_two_ways"] in s.messages
+    assert g["msg_typical"].replace("[Y]", "79,4") in s.messages
+
+
+def test_e03_analysis_without_water_and_typical_bone_message_once():
+    secs, _ = al.measurement_sections(man139(), al.Measures(scale_muscle_percent=30.0))
+    a = [x for x in secs if x.title.startswith("Ανάλυση")][0]
+    names = [r[0] for r in a.table]
+    assert "Νερό (υγρά)" not in names and "Λοιπά" not in names and "Οστικά μέταλλα (τυπική τιμή)" in names
+    typical = e09.load_data()["messages"]["typical"].replace("[X]", "4,5").replace("[Y]", "79,4")
+    allmsgs = [m for x in secs for m in x.messages]
+    assert allmsgs.count(typical) == 1  # δεν επαναλαμβάνεται σε δεύτερη ενότητα
+    assert len(allmsgs) == len(set(allmsgs))
+    assert e03.load_data()["dry_mass"]["msg_no_water"] in a.messages
+
+
+def test_screen_batch2(monkeypatch):
+    vals = {"birth": date(1989, 1, 1), "sex": "Άνδρας", "height": 177.0, "weight": 139.1, "fat": 42.9,
+            "ancestry": "1", "pal": "1.4", "m_muscle": 30.0, "m_water": 39.2, "m_bone": 1.9,
+            "m_prev3": 100.0, "m_prev2": 100.0, "m_prev1": 100.0, "m_today": 98.0, "m_urine": 6, "m_thirst": 5.0}
+    f = run_app(monkeypatch, vals)
+    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    assert not f.errors
+    assert "**Αναλογία νερού / άλιπη μάζα:** 0,687 — Ασυνήθιστη αναλογία" in md
+    assert "**Ενυδάτωση (Βάρος–Ούρα–Δίψα):** Πιθανή αφυδάτωση" in md and "**Λόγος άλιπης / λίπους:** 1,33" in md
+    tables = [a[0] for n, a, k in f.shown if n == "dataframe" and a and isinstance(a[0], list) and a[0]
+              and "Γραμμή" in a[0][0]]
+    assert tables and tables[0][0] == {"Γραμμή": "Άλιπη μάζα", "kg": "79,4", "% άλιπης": "100,0%", "% βάρους": "57,1%"}
+    assert any(a[0].startswith("Διαφορά 4,7 kg") for n, a, k in f.shown if n == "warning")

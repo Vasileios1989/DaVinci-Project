@@ -236,6 +236,7 @@ class FakeSt:
 
     def __init__(self, values):
         self.values, self.shown, self.errors = values, [], []
+        self.inputs, self.expanders, self.group, self.options = [], [], None, {}
         self.column_config = types.SimpleNamespace(**{n: (lambda *a, **k: {"col": n}) for n in
                                                       ("DateColumn", "NumberColumn", "TextColumn", "CheckboxColumn")})
 
@@ -254,12 +255,14 @@ class FakeSt:
         return self.values.get(key, value)
 
     def number_input(self, label, key=None, value=None, **k):
+        self.inputs.append((self.group, label))
         return self.values.get(key, value)
 
     def radio(self, label, options, key=None, **k):
         return self.values.get(key, options[0])
 
     def selectbox(self, label, options, key=None, index=0, **k):
+        self.options[key] = list(options)
         if key in self.values:
             return self.values[key]
         return None if index is None else list(options)[index]
@@ -276,8 +279,19 @@ class FakeSt:
     def tabs(self, names):
         return [Ctx() for _ in names]
 
-    def expander(self, *a, **k):
-        return Ctx()
+    def expander(self, label, *a, **k):
+        self.expanders.append(label)
+        fake = self
+
+        class Group:
+            def __enter__(self):
+                self.prev, fake.group = fake.group, (label if fake.group is None else fake.group)
+                return self
+
+            def __exit__(self, *a):
+                fake.group = self.prev
+                return False
+        return Group()
 
     def texts(self):
         out = []
@@ -363,7 +377,8 @@ def test_screen_guides_show_numbered_steps(monkeypatch):
     f = run_app(monkeypatch, dict(WOMAN))
     steps = measurement.guide(first).steps
     md = [a[0] for n, a, k in f.shown if n == "markdown"]
-    assert md.count(f"1. {steps[0]}") == 1 and f"{len(steps)}. {steps[-1]}" in md
+    # μία φορά στο ⓘ του πεδίου «Ύψος» και μία στην καρτέλα «Οδηγίες μέτρησης»
+    assert md.count(f"1. {steps[0]}") == 2 and f"{len(steps)}. {steps[-1]}" in md
 
 
 def test_files_for_deployment_exist():
@@ -763,8 +778,8 @@ def test_e13_cases_and_women_info():
     assert sec(man37(weight_kg=80.0, fat_percent=15.0), al.Measures(), "Στήθος") is None
     minor = sec(man37(birth_date=date(2012, 1, 1)), al.Measures(chest_cm=80.0), "Στήθος")
     assert minor.lines == (("Μέτρηση", "80,0 cm"),) and m13["record_only"] in minor.messages
-    assert al.guide_extra("στήθος", man37(sex="Γυναίκα")) == (m13["women_info"],)
-    assert al.guide_extra("στήθος", man37()) == () and al.guide_extra("μέση", man37(sex="Γυναίκα")) == ()
+    assert al.guide_extra("στήθος", "Γυναίκα") == (m13["women_info"],)
+    assert al.guide_extra("στήθος", "Άνδρας") == () and al.guide_extra("μέση", "Γυναίκα") == ()
 
 
 def test_screen_batch3(monkeypatch):
@@ -777,3 +792,28 @@ def test_screen_batch3(monkeypatch):
     assert "**Όριο STOP-Bang:** κάτω από το όριο (41 cm)" in md
     infos = [a[0] for n, a, k in f.shown if n == "info"]
     assert e13.load_data()["messages"]["women_info"] in infos  # μέσα στο ⓘ του στήθους
+
+
+def test_screen_inputs_grouped_in_categories(monkeypatch):
+    f = run_app(monkeypatch, {})
+    top = ["1. Προσωπικά στοιχεία", "2. Σύσταση σώματος (ζυγαριά)", "3. Περιφέρειες κορμού (μεζούρα)",
+           "4. Περιφέρειες άκρων (μεζούρα)", "5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"]
+    assert [e for e in f.expanders if e[:2] in ("1.", "2.", "3.", "4.", "5.")] == top
+    where = {label: g for g, label in f.inputs}
+    assert where["Ύψος (cm)"] == top[0]
+    assert {where[x] for x in ("Βάρος (kg)", "Λίπος %", "Μύες %", "Υγρά %", "Οστά %")} == {top[1]}
+    assert {where[x] for x in ("Λαιμός (cm)", "Στήθος (cm)", "Μέση (cm)", "Ισχίο (cm)")} == {top[2]}
+    assert where["Άνω μηρός (cm)"] == top[3] and where["Πρωινό βάρος σήμερα (kg)"] == top[4]
+
+
+def test_screen_missing_fields_listed(monkeypatch):
+    f = run_app(monkeypatch, {"birth": date(1990, 1, 1), "height": 170.0})
+    assert "Συμπλήρωσε: βάρος, λίπος, επίπεδο δραστηριότητας." in f.texts()
+
+
+def test_screen_missing_birth_and_profiles_by_age(monkeypatch):
+    f = run_app(monkeypatch, {"height": 170.0, "weight": 70.0, "fat": 25.0, "pal": "1.4"})
+    assert "Συμπλήρωσε: ημερομηνία γέννησης." in f.texts() and not f.errors
+    assert f.options["profile"] == ["Υγεία", "Αθλητικό", "Bodybuilding"]
+    minor = run_app(monkeypatch, {"birth": date(2012, 1, 1)})
+    assert minor.options["profile"] == ["Υγεία"]

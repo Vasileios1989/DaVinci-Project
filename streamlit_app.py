@@ -28,19 +28,13 @@ st.caption("Επίπεδο Normal · απώλεια λίπους και συντ
 TODAY = al.today()
 
 
-# ------------------------------------------------------------------ στοιχεία χρήστη
-def read_inputs() -> al.PlanInput | None:
-    with st.expander("Τα στοιχεία σου", expanded=True):
+# ------------------------------------------------------------------ στοιχεία χρήστη (όλα τα πεδία, σε κατηγορίες)
+def read_inputs() -> tuple[al.PlanInput | None, al.Measures]:
+    with st.expander("1. Προσωπικά στοιχεία", expanded=True):
         birth = st.date_input("Ημερομηνία γέννησης", value=None, min_value=date(1900, 1, 1), max_value=TODAY,
                               format="DD/MM/YYYY", key="birth")
         sex = st.radio("Φύλο", e01.load_data()["sexes"], horizontal=True, key="sex")
-        c1, c2, c3 = st.columns(3)
-        height = c1.number_input("Ύψος (cm)", min_value=90.0, max_value=230.0, value=None, step=0.1, format="%.1f",
-                                 key="height")
-        weight = c2.number_input("Βάρος (kg)", min_value=0.1, value=None, step=0.1, format="%.1f",
-                                 key="weight")
-        fat = c3.number_input("Λίπος (%)", min_value=0.1, max_value=99.9, value=None, step=0.1, format="%.1f",
-                              key="fat")
+        height = measure_input("Ύψος (cm)", "height", "ύψος", min_value=90.0, max_value=230.0)
         groups = {g["code"]: g["name"] for g in e01.load_data()["ancestry_groups"]}
         ancestry = st.selectbox("Καταγωγή", [None, *groups], format_func=lambda c: "Δεν δηλώνω" if c is None else groups[c],
                                 key="ancestry")
@@ -49,26 +43,48 @@ def read_inputs() -> al.PlanInput | None:
             others = [c for c in groups if c != "5"]
             mixed = st.selectbox("Μικτή καταγωγή: ομάδα ενός γονέα (προαιρετικά)", [None, *others],
                                  format_func=lambda c: "Δεν διάλεξα" if c is None else groups[c], key="mixed")
-        if birth is None:
-            st.info("Συμπλήρωσε ημερομηνία γέννησης, ύψος, βάρος και λίπος.")
-            return None
-        age = e01.age_in_completed_years(birth, TODAY)
-        profiles = al.allowed_profiles(birth, TODAY) or ("Υγεία",)
+        profiles = (al.allowed_profiles(birth, TODAY) or ("Υγεία",)) if birth else e01.load_data()["profiles"]
         profile = st.selectbox("Προφίλ", profiles, key="profile")
         training = st.checkbox("Προπόνηση με βάρη ή μικτή", key="training")
         pregnant = breastfeeding = False
-        if e01.pregnancy_fields_visible(sex, age):
+        if birth and e01.pregnancy_fields_visible(sex, e01.age_in_completed_years(birth, TODAY)):
             pregnant = st.checkbox("Εγκυμοσύνη", key="pregnant")
             breastfeeding = st.checkbox("Θηλασμός", key="breastfeeding")
         pals = al.pal_options()
         pal = st.selectbox("Επίπεδο δραστηριότητας (PAL)", list(pals), index=None, placeholder="Διάλεξε",
                            format_func=lambda k: f"{k.replace('.', ',')} — {pals[k]}", key="pal")
-    if height is None or weight is None or fat is None or pal is None:
-        st.info("Συμπλήρωσε ύψος, βάρος, λίπος και επίπεδο δραστηριότητας.")
-        return None
-    return al.PlanInput(birth_date=birth, sex=sex, height_cm=height, weight_kg=weight, fat_percent=fat, today=TODAY,
-                        ancestry=ancestry, mixed_chosen_group=mixed, profile=profile, resistance_training=training,
-                        pregnant=pregnant, breastfeeding=breastfeeding, pal=float(pal))
+
+    with st.expander("2. Σύσταση σώματος (ζυγαριά)", expanded=True):
+        weight = measure_input("Βάρος (kg)", "weight", "βάρος")
+        fat = measure_input("Λίπος %", "fat", "λίπος % (ζυγαριά)", max_value=99.9)
+        muscle = measure_input("Μύες %", "m_muscle", "μύες % (ζυγαριά)", max_value=99.9)
+        water = measure_input("Υγρά %", "m_water", "υγρά % (ζυγαριά)", max_value=99.9)
+        bone = measure_input("Οστά %", "m_bone", "οστά % (ζυγαριά)", max_value=99.9)
+        visceral = measure_input("Σπλαχνικό λίπος (τιμή ζυγαριάς, χωρίς μονάδα)", "m_visceral",
+                                 "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0)
+
+    with st.expander("3. Περιφέρειες κορμού (μεζούρα)"):
+        neck = measure_input("Λαιμός (cm)", "m_neck", "λαιμός")
+        chest = measure_input("Στήθος (cm)", "m_chest", "στήθος", extra=al.guide_extra("στήθος", sex))
+        waist = measure_input("Μέση (cm)", "m_waist", "μέση")
+        hip = measure_input("Ισχίο (cm)", "m_hip", "ισχίο")
+
+    with st.expander("4. Περιφέρειες άκρων (μεζούρα)"):
+        thigh = measure_input("Άνω μηρός (cm)", "m_thigh", "άνω μηρός")
+
+    m = al.Measures(waist_cm=waist, upper_thigh_cm=thigh, scale_visceral_level=visceral, scale_muscle_percent=muscle,
+                    scale_water_percent=water, scale_bone_percent=bone, hip_cm=hip, neck_cm=neck, chest_cm=chest,
+                    **hydration_inputs())
+
+    missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),
+                              ("επίπεδο δραστηριότητας", pal)) if v is None]
+    if missing:
+        st.info("Συμπλήρωσε: " + ", ".join(missing) + ".")
+        return None, m
+    inp = al.PlanInput(birth_date=birth, sex=sex, height_cm=height, weight_kg=weight, fat_percent=fat, today=TODAY,
+                       ancestry=ancestry, mixed_chosen_group=mixed, profile=profile, resistance_training=training,
+                       pregnant=pregnant, breastfeeding=breastfeeding, pal=float(pal))
+    return inp, m
 
 
 # ------------------------------------------------------------------ πλάνο
@@ -233,7 +249,7 @@ def show_section(sec: al.Section) -> None:
 
 def hydration_inputs() -> dict:
     """Στοιχείο 08, Πίνακας 7: καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό."""
-    with st.expander("Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"):
+    with st.expander("5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"):
         st.caption("Καταγραφή κάθε πρωί, μετά την ούρηση, πριν από φαγητό και ποτό.")
         prev = [st.number_input(f"Πρωινό βάρος πριν από {d} {'ημέρα' if d == 1 else 'ημέρες'} (kg)", min_value=0.1,
                                 value=None, step=0.1, format="%.1f", key=f"m_prev{d}") for d in (3, 2, 1)]
@@ -247,22 +263,8 @@ def hydration_inputs() -> dict:
                 urine_color=urine, thirst=thirst)
 
 
-def tab_measures(inp: al.PlanInput) -> None:
-    st.caption("Συμπλήρωσε όσα έχεις μετρήσει· τα κενά πεδία παραλείπονται. "
-               "Σε κάθε πεδίο, το ⓘ δείχνει πώς μετράς.")
-    m = al.Measures(
-        waist_cm=measure_input("Περιφέρεια μέσης (cm)", "m_waist", "μέση"),
-        hip_cm=measure_input("Περιφέρεια ισχίου (cm)", "m_hip", "ισχίο"),
-        neck_cm=measure_input("Περιφέρεια λαιμού (cm)", "m_neck", "λαιμός"),
-        chest_cm=measure_input("Περιφέρεια στήθους (cm)", "m_chest", "στήθος", extra=al.guide_extra("στήθος", inp)),
-        upper_thigh_cm=measure_input("Περιφέρεια άνω μηρού (cm)", "m_thigh", "άνω μηρός"),
-        scale_visceral_level=measure_input("Σπλαχνικό λίπος — τιμή ζυγαριάς (χωρίς μονάδα)", "m_visceral",
-                                           "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0),
-        scale_muscle_percent=measure_input("Μύες % (ζυγαριά)", "m_muscle", "μύες % (ζυγαριά)", max_value=99.9),
-        scale_water_percent=measure_input("Υγρά % (ζυγαριά)", "m_water", "υγρά % (ζυγαριά)", max_value=99.9),
-        scale_bone_percent=measure_input("Οστά % (ζυγαριά)", "m_bone", "οστά % (ζυγαριά)", max_value=99.9),
-        **hydration_inputs(),
-    )
+def tab_results(inp: al.PlanInput, m: al.Measures) -> None:
+    st.caption("Αποτελέσματα από όσα συμπλήρωσες στις κατηγορίες 2–5· τα κενά πεδία παραλείπονται.")
     sections, errors = al.measurement_sections(inp, m)
     for e in errors:
         st.error(e)
@@ -285,14 +287,14 @@ def tab_guides() -> None:
 
 
 # ------------------------------------------------------------------ σελίδα
-inputs = read_inputs()
-tab1, tab_m, tab2, tab3 = st.tabs(["Πλάνο", "Μετρήσεις", "Κάρτα μέτρησης", "Οδηγίες μέτρησης"])
+inputs, measures = read_inputs()
+tab1, tab_m, tab2, tab3 = st.tabs(["Πλάνο", "Αποτελέσματα", "Κάρτα μέτρησης", "Οδηγίες μέτρησης"])
 with tab1:
     if inputs is not None:
         tab_plan(inputs)
 with tab_m:
     if inputs is not None:
-        tab_measures(inputs)
+        tab_results(inputs, measures)
 with tab2:
     if inputs is not None:
         tab_card(inputs)

@@ -566,10 +566,10 @@ def section_chest(m: Measures, user: e01.UserCategories, weight_kg: float, fat_p
     return Section("Στήθος (Στοιχείο 13)", tuple(lines), _dedupe(r.messages), r.indicative)
 
 
-def guide_extra(field: str, inp: PlanInput) -> tuple[str, ...]:
-    """Επιπλέον κείμενο στο ⓘ ανά χρήστη (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
+def guide_extra(field: str, sex: str) -> tuple[str, ...]:
+    """Επιπλέον κείμενο στο ⓘ ανά φύλο (Στοιχείο 13, Πίνακας 11: σημείωση για γυναίκες)."""
     from davinci import element_13 as e13
-    if field == "στήθος" and inp.sex == "Γυναίκα":
+    if field == "στήθος" and sex == "Γυναίκα":
         return (e13.load_data()["messages"]["women_info"],)
     return ()
 

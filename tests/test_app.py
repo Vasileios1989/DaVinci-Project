@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from davinci import app_logic as al
+from davinci import results_view as rv
 from davinci import element_01 as e01
 from davinci import element_03 as e03
 from davinci import element_40 as e40
@@ -239,6 +240,7 @@ class FakeSt:
         self.values, self.shown, self.errors = values, [], []
         self.inputs, self.expanders, self.group, self.options, self.placeholders = [], [], None, {}, {}
         self.tab_sets, self.session_state = [], dict(values)  # οι τιμές των πεδίων ζουν στο session_state ανά key
+        self.open_expanders, self.placed = [], []  # placed: (είδος, κείμενο, καρτέλα, μέσα σε ⓘ;)
         self.column_config = types.SimpleNamespace(**{n: (lambda *a, **k: {"col": n}) for n in
                                                       ("DateColumn", "NumberColumn", "TextColumn", "CheckboxColumn")})
 
@@ -248,6 +250,8 @@ class FakeSt:
     def __getattr__(self, name):
         def record(*a, **k):
             self.shown.append((name, a, k))
+            if a and isinstance(a[0], str):
+                self.placed.append((name, a[0], self.group, bool(self.open_expanders)))
             if name == "error":
                 self.errors.append(a[0])
         return record
@@ -307,10 +311,12 @@ class FakeSt:
         class Group:
             def __enter__(self):
                 self.prev, fake.group = fake.group, (label if fake.group is None else fake.group)
+                fake.open_expanders.append(label)
                 return self
 
             def __exit__(self, *a):
                 fake.group = self.prev
+                fake.open_expanders.pop()
                 return False
         return Group()
 
@@ -327,6 +333,41 @@ class Ctx:
 
     def __exit__(self, *a):
         return False
+
+
+BR = "  \n"
+
+
+def md_lines(fake):
+    """Οι γραμμές που έδειξε η οθόνη με markdown, μία ανά στοιχείο, στη μορφή «**ετικέτα:** τιμή».
+    Η κάρτα των «Αποτελεσμάτων» γράφει πολλές γραμμές σε μία παράγραφο, τον στόχο με 🎯 και τις δευτερεύουσες
+    γραμμές χωρίς έντονα· εδώ ξαναγίνονται ίδιας μορφής για να ελέγχονται ετικέτα και τιμή αυτούσιες."""
+    out = []
+    for name, a, k in fake.shown:
+        if name != "markdown" or not a or not isinstance(a[0], str) or a[0].lstrip().startswith("<style>"):
+            continue
+        for line in a[0].split(BR):
+            line = line.removeprefix("🎯 ")
+            if not line.startswith("**") and ": " in line:
+                label, value = line.split(": ", 1)
+                line = f"**{label}:** {value}"
+            out.append(line)
+    return out
+
+
+def shown_titles(fake):
+    """Τίτλοι ομάδων (subheader) και τίτλοι καρτών (πρώτη γραμμή κάθε κάρτας) της καρτέλας «Αποτελέσματα»."""
+    out = [a[0] for n, a, k in fake.shown if n == "subheader"]
+    for name, a, k in fake.shown:
+        if name == "markdown" and a and isinstance(a[0], str) and a[0].startswith("**"):
+            out.append(a[0].split(BR)[0].removeprefix("**").split(":**")[0].removesuffix("**"))
+    return out
+
+
+
+def titled(titles, wanted):
+    """Κάθε ζητούμενη κάρτα υπάρχει· ο τίτλος της μπορεί να συνεχίζει με τη λέξη της γραμμής («Πήχης χαλαρός»)."""
+    return all(any(t == w or t.startswith(w + " ") for t in titles) for w in wanted)
 
 
 def run_app(monkeypatch, values):
@@ -382,7 +423,7 @@ def test_screen_tabs_order_and_no_card_or_guides_tab(monkeypatch):
     f = run_app(monkeypatch, {**WOMAN, "card_rows": rows, "card_waist": True, "aha": 500})
     assert f.tab_sets[0] == ["Μέτρηση", "Αποτελέσματα", "Πλάνο"]
     assert f.tab_sets[1] == ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"] and len(f.tab_sets) == 2
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    md = md_lines(f)
     assert not f.errors and not any(x.startswith("**Τρέχον:**") for x in md)
     assert "Γράψε τουλάχιστον μία μέτρηση." not in f.texts()
     src = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
@@ -398,7 +439,7 @@ def test_screen_guides_show_numbered_steps(monkeypatch):
     first = measurement.fields()[0]
     f = run_app(monkeypatch, dict(WOMAN))
     steps = measurement.guide(first).steps
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    md = md_lines(f)
     # μόνο στο ⓘ του πεδίου «Ύψος»· η καρτέλα «Οδηγίες μέτρησης» αφαιρέθηκε
     assert md.count(f"1. {steps[0]}") == 1 and f"{len(steps)}. {steps[-1]}" in md
 
@@ -408,6 +449,28 @@ def test_screen_guide_protocol_shown_inside_info(monkeypatch):
     f = run_app(monkeypatch, {**WOMAN, "level": "Professional"})
     for field in ("δερματοπτυχή τρικεφάλου", "δερματοπτυχή υποπλάτιου"):
         assert measurement.guide(field).protocol in f.texts()
+
+
+def test_screen_results_grouped_brief_and_comments_inside_info(monkeypatch):
+    # απόφαση του χρήστη (11/11/2026): σειρά της «Αναφοράς Σωματικής Σύνθεσης», λίγα λόγια, σχόλια μέσα στο ⓘ
+    vals = {**WOMAN, "aha": 500, "m_waist": 88.0, "m_hip": 104.0, "m_neck": 34.0, "m_chest": 96.0, "m_calf": 37.0,
+            "m_muscle": 28.0, "m_water": 45.0, "m_bone": 3.0}
+    f = run_app(monkeypatch, vals)
+    res = [(kind, text, inside) for kind, text, tab, inside in f.placed if tab == "Αποτελέσματα"]
+    assert [t for kind, t, _ in res if kind == "subheader"] == [
+        "Βασικά στοιχεία", "Σύσταση σώματος", "Μετρήσεις κορμού", "Μετρήσεις άκρων", "Αναλογίες κορμού",
+        "Αναλογίες άκρων", "Σκελετός και δερματοπτυχές", "Σωματότυπος", "Ενυδάτωση"]
+    assert not f.errors and not any("Στοιχεί" in t for _, t, _ in res)
+    assert not any("(Στοιχεί" in e for e in f.expanders)
+    # κάθε σχόλιο (st.write) των «Αποτελεσμάτων» είναι μέσα σε ⓘ· έξω μένουν τιμές, στόχοι και προειδοποιήσεις
+    writes = [inside for kind, _, inside in res if kind == "write"]
+    assert len(writes) > 10 and all(writes)
+    assert all(kind in ("caption", "subheader", "markdown", "warning", "info") for kind, _, inside in res if not inside)
+    assert {"ⓘ Ισχίο", "ⓘ Λαιμός", "ⓘ Στήθος", "ⓘ Γάμπα"} <= set(f.expanders)
+    md = md_lines(f)
+    assert "**Ισχίο:** 104,0 cm" in md and "**Μέση:** 88,0 cm" in md and "**Βάρος:** 72,0 kg" in md
+    raw = [t for kind, t, inside in res if kind == "markdown" and not inside]
+    assert any(t.startswith("**Βάρος:** 72,0 kg" + BR + "🎯 Βάρος-στόχος (Φάση 1): ") for t in raw)
 
 
 def test_files_for_deployment_exist():
@@ -551,12 +614,12 @@ def test_screen_measures_tab(monkeypatch):
     vals = {"birth": date(1989, 1, 1), "sex": "Άνδρας", "height": 177.0, "weight": 138.9, "fat": 60.0 / 138.9 * 100,
             "ancestry": "1", "pal": "1.4", "m_waist": 146.0, "m_thigh": 70.0, "m_muscle": 30.0, "m_visceral": 8.0}
     f = run_app(monkeypatch, vals)
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    md = md_lines(f)
     assert not f.errors
     assert "**Λόγος μέσης/ύψους:** 0,82" in md and "**Σπλαχνικό λίπος (Εκτίμηση):** ≈ 398 cm² (εύρος 350 – 445)" in md
     assert "**Σκελετικοί μύες:** 41,7 kg (ζυγαριά)" in md and "**Τιμή ζυγαριάς (χωρίς μονάδα):** 8,0" in md
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert {"Μέση (Στοιχείο 05)", "Σπλαχνικό λίπος (Στοιχείο 06)", "Σκελετικοί μύες (Στοιχείο 07)"} <= set(subs)
+    subs = shown_titles(f)
+    assert titled(subs, {"Μέση", "Σπλαχνικό λίπος", "Σκελετικοί μύες"})
     assert "Ενδεικτική" in [a[0] for n, a, k in f.shown if n == "warning"]
     steps = measurement.guide("μέση").steps
     assert md.count(f"1. {steps[0]}") >= 1  # οδηγίες δίπλα στο πεδίο
@@ -726,7 +789,7 @@ def test_screen_batch2(monkeypatch):
             "ancestry": "1", "pal": "1.4", "m_muscle": 30.0, "m_water": 39.2, "m_bone": 1.9,
             "m_prev3": 100.0, "m_prev2": 100.0, "m_prev1": 100.0, "m_today": 98.0, "m_urine": 6, "m_thirst": 5.0}
     f = run_app(monkeypatch, vals)
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    md = md_lines(f)
     assert not f.errors
     assert "**Αναλογία νερού / άλιπη μάζα:** 0,687 — Ασυνήθιστη αναλογία" in md
     assert "**Ενυδάτωση (Βάρος–Ούρα–Δίψα):** Πιθανή αφυδάτωση" in md and "**Λόγος άλιπης / λίπους:** 1,33" in md
@@ -811,9 +874,9 @@ def test_screen_batch3(monkeypatch):
     vals = {"birth": date(1989, 1, 1), "sex": "Γυναίκα", "height": 165.0, "weight": 72.0, "fat": 38.0,
             "ancestry": "1", "pal": "1.4", "m_hip": 110.0, "m_neck": 36.0, "m_chest": 100.0}
     f = run_app(monkeypatch, vals)
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert not f.errors and {"Ισχίο (Στοιχείο 11)", "Λαιμός (Στοιχείο 12)", "Στήθος (Στοιχείο 13)"} <= set(subs)
+    md = md_lines(f)
+    subs = shown_titles(f)
+    assert not f.errors and titled(subs, {"Ισχίο", "Λαιμός", "Στήθος"})
     assert "**Όριο STOP-Bang:** κάτω από το όριο (41 cm)" in md
     infos = [a[0] for n, a, k in f.shown if n == "info"]
     assert e13.load_data()["messages"]["women_info"] in infos  # μέσα στο ⓘ του στήθους
@@ -945,12 +1008,12 @@ def test_pro_hydration_blood():
 def test_screen_professional_values_reach_results(monkeypatch):
     vals = {**WOMAN, "level": "Professional", "x_muscle": 25.0, "x_na": 140.0, "x_k": 4.0, "x_glu": 5.0}
     f = run_app(monkeypatch, vals)
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    md = md_lines(f)
     assert "**Σκελετικοί μύες:** 25,0 kg (ιατρική μέτρηση)" in md and not f.errors
     assert not any(x.startswith("**Υπολογισμένη ωσμωτικότητα") for x in md)  # λείπει η ουρία
     g = run_app(monkeypatch, {**vals, "x_urea": 6.0, "birth": date(1950, 1, 1)})
     assert any(x.startswith("**Υπολογισμένη ωσμωτικότητα:**") for x in
-               [a[0] for n, a, k in g.shown if n == "markdown"])
+               md_lines(g))
 
 
 def test_pro_n4_needs_two_real_sources_and_menopause_choice(monkeypatch):
@@ -963,8 +1026,8 @@ def test_pro_n4_needs_two_real_sources_and_menopause_choice(monkeypatch):
     vals = {**WOMAN, "level": "Professional", "x_t": -2.7}
     yes = run_app(monkeypatch, {**vals, "x_meno": "Ναι"})
     no = run_app(monkeypatch, {**vals, "x_meno": "Όχι"})
-    md_yes = [a[0] for n, a, k in yes.shown if n == "markdown"]
-    md_no = [a[0] for n, a, k in no.shown if n == "markdown"]
+    md_yes = md_lines(yes)
+    md_no = md_lines(no)
     assert "**Υγεία οστών (T-score, DXA):** Οστεοπόρωση (κατά την πυκνότητα)" in md_yes
     assert not any(x.startswith("**Υγεία οστών") for x in md_no)
 
@@ -1054,10 +1117,10 @@ def test_e16_document_table10_and_cases():
 def test_screen_batch4(monkeypatch):
     vals = {**WOMAN, "m_shoulders": 100.0, "m_arm_rel": 30.0, "m_biceps": 31.0, "m_fore_rel": 24.0, "m_fore_flx": 25.0}
     f = run_app(monkeypatch, vals)
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
+    subs = shown_titles(f)
     assert not f.errors
-    assert {"Ώμοι (Στοιχείο 14)", "Μπράτσο και δικέφαλος (Στοιχείο 15)", "Πήχης (Στοιχείο 16)"} <= set(subs)
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    assert titled(subs, {"Ώμοι", "Μπράτσο και δικέφαλος", "Πήχης"})
+    md = md_lines(f)
     assert "**Μπράτσο χαλαρό:** 30,0 cm" in md and "**Πήχης σφιγμένος:** 25,0 cm" in md
     where = {label: g for g, label in f.inputs}
     assert where["Ώμοι (cm)"] == "Κορμός" and where["Μπράτσο χαλαρό (cm)"] == "Άκρα"
@@ -1126,10 +1189,10 @@ def test_e19_document_table9_and_swollen():
 def test_screen_batch5(monkeypatch):
     vals = {**WOMAN, "m_wrist": 15.5, "m_thigh18": 58.0, "m_knee": 42.0, "m_knee_swollen": True}
     f = run_app(monkeypatch, vals)
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert not f.errors and {"Καρπός (Στοιχείο 17)", "Μηρός (Στοιχείο 18)", "Πάνω από το γόνατο (Στοιχείο 19)"} <= set(subs)
-    assert "**Μέτρηση:** 58,0 cm" in md and e19.load_data()["messages"]["swollen"] in f.texts()
+    md = md_lines(f)
+    subs = shown_titles(f)
+    assert not f.errors and titled(subs, {"Καρπός", "Μηρός", "Πάνω από το γόνατο"})
+    assert "**Μηρός:** 58,0 cm" in md and e19.load_data()["messages"]["swollen"] in f.texts()
     where = {label: g for g, label in f.inputs}
     assert all(where[x] == "Άκρα" for x in ("Καρπός (cm)", "Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)",
                                                     "Πάνω από το γόνατο (cm)"))
@@ -1212,8 +1275,8 @@ def test_e21_edema_injury_and_cases():
 def test_screen_batch6(monkeypatch):
     vals = {**WOMAN, "m_calf": 36.0, "m_ankle": 21.5, "m_edema": True}
     f = run_app(monkeypatch, vals)
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert not f.errors and {"Γάμπα (Στοιχείο 20)", "Αστράγαλος (Στοιχείο 21)"} <= set(subs)
+    subs = shown_titles(f)
+    assert not f.errors and titled(subs, {"Γάμπα", "Αστράγαλος"})
     assert e20.load_data()["messages"]["edema"] in f.texts() and e21.load_data()["messages"]["edema"] in f.texts()
     assert e21.load_data()["messages"]["T"] in f.texts()  # δίπλα στο πεδίο
     where = {label: g for g, label in f.inputs}
@@ -1321,11 +1384,11 @@ def test_screen_batch7(monkeypatch):
     vals = {**WOMAN, "m_waist": 90.0, "m_hip": 105.0, "m_chest": 100.0, "m_shoulders": 105.0,
             "m_biceps": 31.0, "m_fore_flx": 26.0}
     f = run_app(monkeypatch, vals)
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert not f.errors and {"Λόγος μέσης / ισχίου (Στοιχείο 22)", "Λόγος στήθους / μέσης (Στοιχείο 23)",
-                             "Λόγος ώμων / μέσης (Στοιχείο 24)", "Λόγος πήχη / δικεφάλου (Στοιχείο 25)"} <= set(subs)
+    subs = shown_titles(f)
+    assert not f.errors and titled(subs, {"Λόγος μέσης / ισχίου", "Λόγος στήθους / μέσης",
+                             "Λόγος ώμων / μέσης", "Λόγος πήχη / δικεφάλου"})
     assert e25.load_data()["messages"]["T"] in f.texts()  # δίπλα στα πεδία
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    md = md_lines(f)
     assert "**Λόγος μέσης / ισχίου:** 0,86" in md and "**Ταξινόμηση:** Ουσιαστικά αυξημένος κίνδυνος" in md
     f2 = run_app(monkeypatch, {**vals, "m_arm_injured": True})
     assert e25.load_data()["messages"]["injury"] in f2.texts()
@@ -1432,9 +1495,9 @@ def test_screen_batch8(monkeypatch):
     vals = {**WOMAN, "m_thigh18": 60.0, "m_calf": 38.0, "m_wrist": 15.5, "m_biceps": 30.0, "m_ankle": 22.0,
             "m_knee": 40.0}
     f = run_app(monkeypatch, vals)
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert not f.errors and {"Λόγος μηρού / γάμπας (Στοιχείο 26)", "Λόγος καρπού / δικεφάλου (Στοιχείο 27)",
-                             "Λόγος αστραγάλου / γάμπας (Στοιχείο 28)", "Λόγος μηρού / γονάτου (Στοιχείο 29)"} <= set(subs)
+    subs = shown_titles(f)
+    assert not f.errors and titled(subs, {"Λόγος μηρού / γάμπας", "Λόγος καρπού / δικεφάλου",
+                             "Λόγος αστραγάλου / γάμπας", "Λόγος μηρού / γονάτου"})
     for k in (26, 27, 28, 29):
         assert al.field_note(k) in f.texts(), k
     f2 = run_app(monkeypatch, {**vals, "m_lipedema": True, "m_leg_injured": True})
@@ -1525,9 +1588,9 @@ def test_e31_knee_breadth():
 def test_screen_batch9(monkeypatch):
     vals = {**WOMAN, "level": "Professional", "p_elbow": 6.5, "p_knee1": 9.0, "p_knee2": 9.1}
     f = run_app(monkeypatch, vals)
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert not f.errors and {"Σκελετός — εύρος αγκώνα (Στοιχεία 30, 32)", "Εύρος γονάτου (Στοιχείο 31)"} <= set(subs)
-    md = [a[0] for n, a, k in f.shown if n == "markdown"]
+    subs = shown_titles(f)
+    assert not f.errors and titled(subs, {"Σκελετός", "Εύρος γονάτου"})
+    md = md_lines(f)
     assert "**Σκελετός:** Μεσαίος" in md and "**Ποιος μέτρησε · πλευρά:** Άλλο άτομο · δεξί πόδι" in md
     where = {label: g for g, label in f.inputs}
     assert where["Εύρος αγκώνα (cm)"] == "Όργανα" and where["Εύρος γονάτου — 1η μέτρηση (cm)"] == "Όργανα"
@@ -1636,9 +1699,9 @@ def test_screen_batch10(monkeypatch):
             "p_tri1": 20.0, "p_tri2": 20.4, "p_sub1": 15.0, "p_sub2": 15.2, "p_sup1": 12.0, "p_sup2": 12.2,
             "p_sup_site": "Ναι", "p_calf1": 15.0, "p_calf2": 15.0, "m_calf": 37.0}
     f = run_app(monkeypatch, vals)
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert not f.errors and {"Δερματοπτυχή τρικεφάλου (Στοιχείο 33)", "Δερματοπτυχή υποπλάτιου (Στοιχείο 34)",
-                             "Δερματοπτυχή υπερακάνθιου (Στοιχείο 35)", "Δερματοπτυχή γάμπας (Στοιχείο 36)"} <= set(subs)
+    subs = shown_titles(f)
+    assert not f.errors and titled(subs, {"Δερματοπτυχή τρικεφάλου", "Δερματοπτυχή υποπλάτιου",
+                             "Δερματοπτυχή υπερακάνθιου", "Δερματοπτυχή γάμπας"})
     assert e35.before_message() in f.texts() and e36.before_message() in f.texts()
     where = {label: g for g, label in f.inputs}
     assert where["Τρικέφαλος — 1η μέτρηση (mm)"] == "Όργανα"
@@ -1765,20 +1828,21 @@ def test_e39_conditions():
 
 def test_screen_batch11(monkeypatch):
     f = run_app(monkeypatch, {**WOMAN, "m_amputation": True})
-    subs = [a[0] for n, a, k in f.shown if n == "subheader"]
-    assert not f.errors and {"Σκελετός (Στοιχείο 32)", "Εύρη οστών και δερματοπτυχές (Στοιχεία 30, 31, 33–36)",
-                             "Ενδομορφία και μεσομορφία (Στοιχεία 37, 38)", "Εκτομορφία (Στοιχείο 39)"} <= set(subs)
+    subs = shown_titles(f)
+    assert not f.errors and titled(subs, {"Σκελετός", "Εύρη οστών και δερματοπτυχές",
+                             "Ενδομορφία και μεσομορφία", "Εκτομορφία"})
     assert e39.load_data()["messages"]["condition"].replace("[το οίδημα/ο ακρωτηριασμός]", "ο ακρωτηριασμός") in f.texts()
     vals = {**WOMAN, "level": "Professional", "p_caliper": "Harpenden / Holtain", "p_isak": "Ναι",
             "p_tri1": 15.0, "p_tri2": 15.0, "p_sub1": 12.0, "p_sub2": 12.0, "p_sup1": 10.0, "p_sup2": 10.0,
             "p_sup_site": "Ναι", "p_calf1": 12.0, "p_calf2": 12.0, "m_calf": 37.0, "p_elbow": 6.4,
             "p_knee1": 9.0, "p_knee2": 9.0, "m_biceps": 30.0}
     g = run_app(monkeypatch, vals)
-    subs = [a[0] for n, a, k in g.shown if n == "subheader"]
-    assert not g.errors and {"Ενδομορφία (Στοιχείο 37)", "Μεσομορφία (Στοιχείο 38)", "Εκτομορφία (Στοιχείο 39)"} <= set(subs)
-    md = [a[0] for n, a, k in g.shown if n == "markdown"]
+    subs = shown_titles(g)
+    assert not g.errors and titled(subs, {"Ενδομορφία", "Μεσομορφία", "Εκτομορφία"})
+    md = md_lines(g)
     assert any(x.startswith("**Ενδομορφία:**") for x in md) and any(x.startswith("**Μεσομορφία:**") for x in md)
     il = run_app(monkeypatch, {**vals, "p_sup_site": "Όχι, στο πλάι (λαγόνια ακρολοφία)"})
-    assert e37.load_data()["messages"]["iliac"] in il.texts()
+    # στα «Αποτελέσματα» η παρένθεση «(Στοιχείο 35)» δεν εμφανίζεται· το υπόλοιπο μήνυμα μένει αυτούσιο
+    assert rv.clean_text(e37.load_data()["messages"]["iliac"]) in il.texts()
     cm = run_app(monkeypatch, {**vals, "p_caliper_max": True})
-    assert any(x.startswith("**Ενδομορφία:** τουλάχιστον") for n, a, k in cm.shown if n == "markdown" for x in a[:1])
+    assert any(x.startswith("**Ενδομορφία:** τουλάχιστον") for x in md_lines(cm))

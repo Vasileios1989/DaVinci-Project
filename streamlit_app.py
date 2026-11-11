@@ -17,6 +17,7 @@ from davinci import app_logic as al  # noqa: E402
 from davinci import element_01 as e01  # noqa: E402
 from davinci import element_44 as e44  # noqa: E402
 from davinci import measurement  # noqa: E402
+from davinci import results_view as rv  # noqa: E402
 from davinci.fmt import num  # noqa: E402
 
 st.set_page_config(page_title="DaVinci Fitness", page_icon="💪", layout="centered")
@@ -384,24 +385,39 @@ def measure_input(label: str, key: str, field: str | None, *, min_value: float |
     return v
 
 
-def show_section(sec: al.Section) -> None:
-    with st.container(border=True):
-        _section_body(sec)
+BR = "  \n"  # αλλαγή γραμμής μέσα στην ίδια παράγραφο (markdown)
 
 
-def _section_body(sec: al.Section) -> None:
-    st.subheader(sec.title)
-    if sec.indicative:
-        st.warning("Ενδεικτική")
-    for label, value in sec.lines:
-        st.markdown(f"**{label}:** {value}")
-    if sec.table:
-        head, *body = sec.table
+def show_card(card: rv.Card) -> None:
+    """Μία μέτρηση με λίγα λόγια: τιμή, ταξινόμηση, 🎯 στόχος. Τα σχόλια και οι λεπτομέρειες μέσα στο ⓘ·
+    οι προειδοποιήσεις μένουν ορατές."""
+    title, value, rest = rv.headline(card)
+    text = [f"**{title}:** {value}" if value is not None else f"**{title}**"]
+    text += [f"{label}: {v}" for label, v in rest]
+    text += [f"🎯 {label}: {v}" for label, v in card.targets]
+    st.markdown(BR.join(text))
+    if card.table:
+        head, *body = card.table
         st.dataframe([dict(zip(head, r)) for r in body], hide_index=True)
-    for w in sec.warnings:
+    if card.indicative:
+        st.warning("Ενδεικτική")
+    for w in card.warnings:
         st.warning(w)
-    for m in sec.messages:
-        st.write(m)
+    if card.details or card.messages:
+        with st.expander(f"ⓘ {card.title}"):
+            if card.details:
+                st.markdown(BR.join(f"**{label}:** {v}" for label, v in card.details))
+            for m in card.messages:
+                st.write(m)
+
+
+def show_group(group: rv.Group) -> None:
+    with st.container(border=True):
+        st.subheader(group.title)
+        if group.lines:
+            st.markdown(BR.join(f"**{label}:** {v}" for label, v in group.lines))
+        for card in group.cards:
+            show_card(card)
 
 
 def hydration_inputs() -> dict:
@@ -419,11 +435,12 @@ def hydration_inputs() -> dict:
 
 def tab_results(inp: al.PlanInput, m: al.Measures) -> None:
     st.caption("Αποτελέσματα από όσα συμπλήρωσες στην καρτέλα «Μέτρηση»· τα κενά πεδία παραλείπονται.")
-    sections, errors = al.measurement_sections(inp, m)
+    st.caption("🎯 = στόχος ή αναμενόμενη τιμή στο βάρος-στόχο · ⓘ = σχόλια και λεπτομέρειες")
+    groups, errors = rv.results(inp, m)
     for e in errors:
         st.error(e)
-    for sec in sections:
-        show_section(sec)
+    for group in groups:
+        show_group(group)
 
 
 # ------------------------------------------------------------------ σελίδα

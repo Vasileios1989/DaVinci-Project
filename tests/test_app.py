@@ -765,6 +765,30 @@ def test_screen_remember_me_and_google(monkeypatch):
     assert out.session_state["_cookie"] is None and "session" not in out.session_state
 
 
+def test_screen_google_return_problems_are_explained(monkeypatch):
+    from fake_supabase import FakeSupabase
+    from davinci import cloud
+    srv = FakeSupabase()
+    c = cloud.Supabase("https://x.supabase.co", "pk", srv, app_url="https://app.streamlit.app")
+    monkeypatch.setattr(cloud, "from_secrets", lambda sec: c if sec else None)
+    sec = {"secrets": {"supabase": {"url": "https://x.supabase.co", "key": "pk"}}}
+    denied = run_app(monkeypatch, {**sec, **WOMAN, "_query": {"error": "access_denied",
+                                                              "error_description": "User cancelled"}})
+    assert "Η σύνδεση με Google απέτυχε: User cancelled (access_denied)." in denied.errors
+    assert denied.query_params == {}
+    nokey = run_app(monkeypatch, {**sec, **WOMAN, "_query": {"code": "abc"}})  # επιστροφή χωρίς dv (Redirect URLs)
+    assert cloud.OAUTH_NO_KEY in nokey.errors and not srv.calls
+    q = dict(x.split("=", 1) for x in srv.google(c.google_url(), "g@gmail.com").split("?", 1)[1].split("&"))
+    ok = run_app(monkeypatch, {**sec, **WOMAN, "_query": dict(q)})
+    s = ok.session_state["session"]
+    # ο ίδιος κωδικός ξανά, ενώ είσαι ήδη συνδεδεμένος: κανένα σφάλμα, η διεύθυνση καθαρίζει
+    again = run_app(monkeypatch, {**sec, **WOMAN, "mode": "account", "session": s, "_query": dict(q)})
+    assert not again.errors and again.query_params == {} and again.session_state["session"] == s
+    # ο ίδιος κωδικός σε νέα συνεδρία: εξηγεί ότι έληξε
+    late = run_app(monkeypatch, {**sec, **WOMAN, "_query": dict(q)})
+    assert cloud.OAUTH_EXPIRED in late.errors
+
+
 def test_files_for_deployment_exist():
     assert (ROOT / "streamlit_app.py").is_file()
     assert (ROOT / "requirements.txt").read_text(encoding="utf-8").startswith("streamlit")

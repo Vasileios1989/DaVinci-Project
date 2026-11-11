@@ -2,7 +2,9 @@
 ψεύτικο streamlit, ώστε να ελέγχεται ότι τρέχει όλη η ροή χωρίς σφάλματα.
 Η οθόνη ΔΕΝ ελέγχεται εδώ με το πραγματικό Streamlit (δεν ήταν εγκατεστημένο στο περιβάλλον ανάπτυξης)."""
 
+import html
 import importlib
+import re
 import runpy
 import sys
 import types
@@ -240,7 +242,8 @@ class FakeSt:
         self.values, self.shown, self.errors = values, [], []
         self.inputs, self.expanders, self.group, self.options, self.placeholders = [], [], None, {}, {}
         self.tab_sets, self.session_state = [], dict(values)  # οι τιμές των πεδίων ζουν στο session_state ανά key
-        self.open_expanders, self.placed = [], []  # placed: (είδος, κείμενο, καρτέλα, μέσα σε ⓘ;)
+        self.open_expanders, self.placed = [], []  # placed: (είδος, κείμενο, καρτέλα, μέσα σε ⓘ;, διαδρομή)
+        self.path = []  # καρτέλες από έξω προς τα μέσα
         self.column_config = types.SimpleNamespace(**{n: (lambda *a, **k: {"col": n}) for n in
                                                       ("DateColumn", "NumberColumn", "TextColumn", "CheckboxColumn")})
 
@@ -251,7 +254,7 @@ class FakeSt:
         def record(*a, **k):
             self.shown.append((name, a, k))
             if a and isinstance(a[0], str):
-                self.placed.append((name, a[0], self.group, bool(self.open_expanders)))
+                self.placed.append((name, a[0], self.group, bool(self.open_expanders), tuple(self.path)))
             if name == "error":
                 self.errors.append(a[0])
         return record
@@ -294,10 +297,12 @@ class FakeSt:
 
             def __enter__(self):
                 self.prev, fake.group = fake.group, self.name
+                fake.path.append(self.name)
                 return self
 
             def __exit__(self, *a):
                 fake.group = self.prev
+                fake.path.pop()
                 return False
         return [Tab(n) for n in names]
 
@@ -338,31 +343,38 @@ class Ctx:
 BR = "  \n"
 
 
+_PAIR = re.compile(r'<b>(.*?)</b>: <span class="dv-v[^"]*">(.*?)</span>')
+_TITLE = re.compile(r'<div class="dv-row[^"]*"><b>(.*?)</b>')
+
+
 def md_lines(fake):
     """Οι γραμμές που έδειξε η οθόνη με markdown, μία ανά στοιχείο, στη μορφή «**ετικέτα:** τιμή».
-    Η κάρτα των «Αποτελεσμάτων» γράφει πολλές γραμμές σε μία παράγραφο, τον στόχο με 🎯 και τις δευτερεύουσες
-    γραμμές χωρίς έντονα· εδώ ξαναγίνονται ίδιας μορφής για να ελέγχονται ετικέτα και τιμή αυτούσιες."""
+    Οι γραμμές των «Αποτελεσμάτων» είναι HTML (χρώματα, εσοχές): από αυτές κρατιούνται τα ζεύγη ετικέτα–τιμή
+    (μέτρηση και δευτερεύουσες γραμμές), αυτούσια. Το ⓘ γράφει «**ετικέτα:** τιμή» με αλλαγές γραμμής."""
     out = []
     for name, a, k in fake.shown:
         if name != "markdown" or not a or not isinstance(a[0], str) or a[0].lstrip().startswith("<style>"):
             continue
-        for line in a[0].split(BR):
-            line = line.removeprefix("🎯 ")
-            if not line.startswith("**") and ": " in line:
-                label, value = line.split(": ", 1)
-                line = f"**{label}:** {value}"
-            out.append(line)
+        if a[0].startswith("<div"):
+            out += [f"**{html.unescape(x)}:** {html.unescape(y)}" for x, y in _PAIR.findall(a[0])]
+            continue
+        out += a[0].split(BR)
     return out
+
+
+def targets_shown(fake):
+    """Οι γραμμές «(Στόχος: …)» των «Αποτελεσμάτων», όπως φαίνονται."""
+    return [html.unescape(x) for n, a, k in fake.shown if n == "markdown" and a and isinstance(a[0], str)
+            for x in re.findall(r'<div class="dv-target">(.*?)</div>', a[0])]
 
 
 def shown_titles(fake):
-    """Τίτλοι ομάδων (subheader) και τίτλοι καρτών (πρώτη γραμμή κάθε κάρτας) της καρτέλας «Αποτελέσματα»."""
+    """Τίτλοι καρτελών (subheader) και ονόματα γραμμών των «Αποτελεσμάτων»."""
     out = [a[0] for n, a, k in fake.shown if n == "subheader"]
     for name, a, k in fake.shown:
-        if name == "markdown" and a and isinstance(a[0], str) and a[0].startswith("**"):
-            out.append(a[0].split(BR)[0].removeprefix("**").split(":**")[0].removesuffix("**"))
+        if name == "markdown" and a and isinstance(a[0], str) and a[0].startswith("<div"):
+            out += [html.unescape(x) for x in _TITLE.findall(a[0])]
     return out
-
 
 
 def titled(titles, wanted):
@@ -422,7 +434,8 @@ def test_screen_tabs_order_and_no_card_or_guides_tab(monkeypatch):
                          "Συσκευή / μέθοδος": ["μεζούρα"] * 4, "ISAK": [False] * 4})
     f = run_app(monkeypatch, {**WOMAN, "card_rows": rows, "card_waist": True, "aha": 500})
     assert f.tab_sets[0] == ["Μέτρηση", "Αποτελέσματα", "Πλάνο"]
-    assert f.tab_sets[1] == ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"] and len(f.tab_sets) == 2
+    assert f.tab_sets[1] == ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"] and len(f.tab_sets) == 3
+    assert f.tab_sets[2] == list(rv.TAB_TITLES)  # κουμπιά των «Αποτελεσμάτων»
     md = md_lines(f)
     assert not f.errors and not any(x.startswith("**Τρέχον:**") for x in md)
     assert "Γράψε τουλάχιστον μία μέτρηση." not in f.texts()
@@ -451,17 +464,19 @@ def test_screen_guide_protocol_shown_inside_info(monkeypatch):
         assert measurement.guide(field).protocol in f.texts()
 
 
-def test_screen_results_grouped_brief_and_comments_inside_info(monkeypatch):
-    # απόφαση του χρήστη (11/11/2026): σειρά της «Αναφοράς Σωματικής Σύνθεσης», λίγα λόγια, σχόλια μέσα στο ⓘ
+def test_screen_results_tabs_brief_colored_and_comments_inside_info(monkeypatch):
+    # αποφάσεις του χρήστη (11/11/2026): κάθε κατηγορία σε δικό της κουμπί, λίγα λόγια, σχόλια μέσα στο ⓘ,
+    # αλλαγή προς τον στόχο με χρώμα, στόχος από κάτω με γκρι γράμματα χωρίς emoji
     vals = {**WOMAN, "aha": 500, "m_waist": 88.0, "m_hip": 104.0, "m_neck": 34.0, "m_chest": 96.0, "m_calf": 37.0,
             "m_muscle": 28.0, "m_water": 45.0, "m_bone": 3.0}
     f = run_app(monkeypatch, vals)
-    res = [(kind, text, inside) for kind, text, tab, inside in f.placed if tab == "Αποτελέσματα"]
+    res = [(kind, text, inside) for kind, text, tab, inside, path in f.placed if path[:1] == ("Αποτελέσματα",)]
     assert [t for kind, t, _ in res if kind == "subheader"] == [
-        "Βασικά στοιχεία", "Σύσταση σώματος", "Μετρήσεις κορμού", "Μετρήσεις άκρων", "Αναλογίες κορμού",
-        "Αναλογίες άκρων", "Σκελετός και δερματοπτυχές", "Σωματότυπος", "Ενυδάτωση"]
+        "Βασικά στοιχεία", "Σύσταση σώματος", "Α. Άλιπη μάζα σε ιστούς", "Β. Άλιπη μάζα σε συστατικά", "Δείκτες",
+        "Μετρήσεις κορμού", "Μετρήσεις άκρων", "Αναλογίες κορμού", "Αναλογίες άκρων",
+        "Σκελετός, δερματοπτυχές, σωματότυπος, ενυδάτωση"]
     assert not f.errors and not any("Στοιχεί" in t for _, t, _ in res)
-    assert not any("(Στοιχεί" in e for e in f.expanders)
+    assert not any("Στοιχεί" in e for e in f.expanders) and not any("🎯" in t for _, t, _ in res)
     # κάθε σχόλιο (st.write) των «Αποτελεσμάτων» είναι μέσα σε ⓘ· έξω μένουν τιμές, στόχοι και προειδοποιήσεις
     writes = [inside for kind, _, inside in res if kind == "write"]
     assert len(writes) > 10 and all(writes)
@@ -469,8 +484,20 @@ def test_screen_results_grouped_brief_and_comments_inside_info(monkeypatch):
     assert {"ⓘ Ισχίο", "ⓘ Λαιμός", "ⓘ Στήθος", "ⓘ Γάμπα"} <= set(f.expanders)
     md = md_lines(f)
     assert "**Ισχίο:** 104,0 cm" in md and "**Μέση:** 88,0 cm" in md and "**Βάρος:** 72,0 kg" in md
-    raw = [t for kind, t, inside in res if kind == "markdown" and not inside]
-    assert any(t.startswith("**Βάρος:** 72,0 kg" + BR + "🎯 Βάρος-στόχος (Φάση 1): ") for t in raw)
+    weight = next(t for kind, t, inside in res if kind == "markdown" and "<b>Βάρος</b>" in t)
+    assert '<span class="dv-down">▼ −' in weight  # πρέπει να πέσει: κόκκινο ▼· η μέτρηση χωρίς χρώμα
+    assert '<span class="dv-v">72,0 kg</span>' in weight and '<div class="dv-target">(Στόχος: ' in weight
+    assert any(t.startswith("(Αναμενόμενο: ≈ ") for t in targets_shown(f))
+    assert "(Λαιμός" not in "".join(targets_shown(f)) and "(Στόχος: —)" in targets_shown(f)  # η λέξη του κώδικα μένει
+
+
+def test_screen_results_missing_scale_values_say_what_to_fill(monkeypatch):
+    man = {"birth": date(1989, 1, 1), "sex": "Άνδρας", "height": 177.0, "weight": 138.9, "fat": 43.2,
+           "ancestry": "1", "pal": "1.4", "aha": 500}
+    f = run_app(monkeypatch, man)
+    infos = [t for kind, t, tab, inside, path in f.placed if kind == "info" and path == ("Αποτελέσματα", "Ιστοί (Α)")]
+    assert "Για τις γραμμές που λείπουν συμπλήρωσε στη «Μέτρηση» → «Ζυγαριά»: Μύες %." in infos
+    assert "**Σκελετικοί μύες:** δεν υπολογίστηκε" in md_lines(f)
 
 
 def test_files_for_deployment_exist():
@@ -616,7 +643,7 @@ def test_screen_measures_tab(monkeypatch):
     f = run_app(monkeypatch, vals)
     md = md_lines(f)
     assert not f.errors
-    assert "**Λόγος μέσης/ύψους:** 0,82" in md and "**Σπλαχνικό λίπος (Εκτίμηση):** ≈ 398 cm² (εύρος 350 – 445)" in md
+    assert "**Λόγος μέσης / ύψους:** 0,82" in md and "**Σπλαχνικό λίπος (Εκτίμηση):** ≈ 398 cm² (εύρος 350 – 445)" in md
     assert "**Σκελετικοί μύες:** 41,7 kg (ζυγαριά)" in md and "**Τιμή ζυγαριάς (χωρίς μονάδα):** 8,0" in md
     subs = shown_titles(f)
     assert titled(subs, {"Μέση", "Σπλαχνικό λίπος", "Σκελετικοί μύες"})
@@ -793,9 +820,11 @@ def test_screen_batch2(monkeypatch):
     assert not f.errors
     assert "**Αναλογία νερού / άλιπη μάζα:** 0,687 — Ασυνήθιστη αναλογία" in md
     assert "**Ενυδάτωση (Βάρος–Ούρα–Δίψα):** Πιθανή αφυδάτωση" in md and "**Λόγος άλιπης / λίπους:** 1,33" in md
-    tables = [a[0] for n, a, k in f.shown if n == "dataframe" and a and isinstance(a[0], list) and a[0]
-              and "Γραμμή" in a[0][0]]
-    assert tables and tables[0][0] == {"Γραμμή": "Άλιπη μάζα", "kg": "79,4", "% άλιπης": "100,0%", "% βάρους": "57,1%"}
+    # ο πίνακας της ανάλυσης φαίνεται ως γραμμές κάτω από τις επικεφαλίδες Α και Β, όχι ως πίνακας
+    assert not [a for n, a, k in f.shown if n == "dataframe" and a and isinstance(a[0], list) and a[0]
+                and "Γραμμή" in a[0][0]]
+    assert "**Άλιπη μάζα:** 79,4 kg" in md and titled(shown_titles(f), {"Ξηρή άλιπη μάζα", "Λοιπά", "Διαφορά"})
+    assert {"Α. Άλιπη μάζα σε ιστούς", "Β. Άλιπη μάζα σε συστατικά"} <= set(shown_titles(f))
     assert any(a[0].startswith("Διαφορά 4,7 kg") for n, a, k in f.shown if n == "warning")
 
 
@@ -1119,7 +1148,7 @@ def test_screen_batch4(monkeypatch):
     f = run_app(monkeypatch, vals)
     subs = shown_titles(f)
     assert not f.errors
-    assert titled(subs, {"Ώμοι", "Μπράτσο και δικέφαλος", "Πήχης"})
+    assert titled(subs, {"Ώμοι", "Μπράτσο χαλαρό", "Πήχης"}) and "ⓘ Μπράτσο και δικέφαλος" in f.expanders
     md = md_lines(f)
     assert "**Μπράτσο χαλαρό:** 30,0 cm" in md and "**Πήχης σφιγμένος:** 25,0 cm" in md
     where = {label: g for g, label in f.inputs}

@@ -7,6 +7,7 @@
 import sys
 from dataclasses import replace
 from datetime import date
+from html import escape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
@@ -50,6 +51,14 @@ STYLE = """
 .stButton button, .stDownloadButton button {border-radius: 999px; font-weight: 700; letter-spacing: .04em;}
 [data-baseweb="input"], [data-baseweb="select"] > div {border-radius: 12px;}
 h1 {font-weight: 800; letter-spacing: -.01em;}
+/* «Αποτελέσματα»: γραμμές μέτρησης, αλλαγή προς τον στόχο, στόχος */
+.dv-row {margin: .15rem 0 .7rem 0; line-height: 1.45;}
+.dv-l1 {margin-left: 1.3rem;} .dv-l2 {margin-left: 2.6rem;}
+.dv-note, .dv-missing {opacity: .75;}
+.dv-down {color: #FF6B6B; font-weight: 700;}
+.dv-up {color: #4ADE80; font-weight: 700;}
+.dv-sub {font-size: .92rem; opacity: .9;}
+.dv-target {font-size: .85rem; color: rgba(242,243,247,.55);}
 h3 {font-size: 1.15rem;}
 </style>
 """
@@ -388,36 +397,60 @@ def measure_input(label: str, key: str, field: str | None, *, min_value: float |
 BR = "  \n"  # αλλαγή γραμμής μέσα στην ίδια παράγραφο (markdown)
 
 
+def _pair(label: str, value: str, cls: str = "dv-v") -> str:
+    return f'<b>{escape(label)}</b>: <span class="{cls}">{escape(value)}</span>'
+
+
+def row_html(r: rv.Row) -> str:
+    """Μία γραμμή: όνομα και μέτρηση (κανονικό χρώμα), αλλαγή προς τον στόχο (κόκκινο ▼ / πράσινο ▲),
+    δευτερεύουσες γραμμές, και από κάτω (Στόχος: …) με μικρά γκρι γράμματα."""
+    if r.value is not None:
+        head = _pair(r.name, r.value)
+    elif r.missing:
+        head = _pair(r.name, r.missing, "dv-v dv-missing")
+    else:
+        head = f"<b>{escape(r.name)}</b>"
+    if r.note:
+        head += f' <span class="dv-note">· {escape(r.note)}</span>'
+    if r.change:
+        head += "".join(f' <span class="dv-{d}">{escape(t)}</span>' for d, t in r.change.parts)
+    out = [head] + [f'<div class="dv-sub">{_pair(a, b)}</div>' for a, b in r.subs]
+    if r.target_word:
+        out.append(f'<div class="dv-target">({escape(r.target_word)}: {escape(r.target)})</div>')
+    return f'<div class="dv-row dv-l{r.level}">' + "".join(out) + "</div>"
+
+
 def show_card(card: rv.Card) -> None:
-    """Μία μέτρηση με λίγα λόγια: τιμή, ταξινόμηση, 🎯 στόχος. Τα σχόλια και οι λεπτομέρειες μέσα στο ⓘ·
-    οι προειδοποιήσεις μένουν ορατές."""
-    title, value, rest = rv.headline(card)
-    text = [f"**{title}:** {value}" if value is not None else f"**{title}**"]
-    text += [f"{label}: {v}" for label, v in rest]
-    text += [f"🎯 {label}: {v}" for label, v in card.targets]
-    st.markdown(BR.join(text))
-    if card.table:
+    """Οι γραμμές της κάρτας· οι προειδοποιήσεις και ό,τι λείπει ορατά· οι λεπτομέρειες και τα σχόλια στο ⓘ."""
+    st.markdown("".join(row_html(r) for r in card.rows), unsafe_allow_html=True)
+    if card.table and card.show_table:  # ο πίνακας της ανάλυσης άλιπης μάζας φαίνεται ως γραμμές (Α, Β)
         head, *body = card.table
         st.dataframe([dict(zip(head, r)) for r in body], hide_index=True)
+    for n in card.needs:
+        st.info(n)
     if card.indicative:
         st.warning("Ενδεικτική")
     for w in card.warnings:
         st.warning(w)
-    if card.details or card.messages:
+    if card.info_lines or card.messages:
         with st.expander(f"ⓘ {card.title}"):
-            if card.details:
-                st.markdown(BR.join(f"**{label}:** {v}" for label, v in card.details))
+            if card.info_lines:
+                st.markdown(BR.join(f"**{label}:** {v}" for label, v in card.info_lines))
             for m in card.messages:
                 st.write(m)
 
 
 def show_group(group: rv.Group) -> None:
     with st.container(border=True):
-        st.subheader(group.title)
+        st.subheader(group.heading or group.title)
+        if group.todo:
+            st.info(group.todo)
         if group.lines:
             st.markdown(BR.join(f"**{label}:** {v}" for label, v in group.lines))
         for card in group.cards:
             show_card(card)
+        if not (group.cards or group.lines):
+            st.info("Δεν υπάρχουν αποτελέσματα εδώ: συμπλήρωσε τις μετρήσεις αυτής της κατηγορίας στη «Μέτρηση».")
 
 
 def hydration_inputs() -> dict:
@@ -435,12 +468,16 @@ def hydration_inputs() -> dict:
 
 def tab_results(inp: al.PlanInput, m: al.Measures) -> None:
     st.caption("Αποτελέσματα από όσα συμπλήρωσες στην καρτέλα «Μέτρηση»· τα κενά πεδία παραλείπονται.")
-    st.caption("🎯 = στόχος ή αναμενόμενη τιμή στο βάρος-στόχο · ⓘ = σχόλια και λεπτομέρειες")
+    st.caption("▼ κόκκινο = πρέπει να πέσει · ▲ πράσινο = πρέπει να ανέβει · ⓘ = σχόλια και λεπτομέρειες")
     groups, errors = rv.results(inp, m)
     for e in errors:
         st.error(e)
-    for group in groups:
-        show_group(group)
+    if not groups:
+        return
+    # Κάθε κατηγορία σε δικό της κουμπί (απόφαση του χρήστη 11/11/2026)· η σειρά είναι πάντα η ίδια.
+    for tab, group in zip(st.tabs([g.title for g in groups]), groups):
+        with tab:
+            show_group(group)
 
 
 # ------------------------------------------------------------------ σελίδα

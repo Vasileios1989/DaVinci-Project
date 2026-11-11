@@ -799,6 +799,17 @@ def test_no_removed_streamlit_parameters():
     assert "use_container_width" not in (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
 
 
+def test_field_label_not_covered_by_input():
+    # Αρνητικό κάτω περιθώριο στην ετικέτα τραβούσε το πεδίο από κάτω πάνω στα γράμματα και στο «ⓘ info»
+    # (φάνηκε στο κινητό, 11/11/2026). Το περιθώριο της .dv-label πρέπει να είναι ≥ 0.
+    src = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
+    rule = re.search(r"^\.dv-label \{([^}]*)\}", src, flags=re.M)
+    assert rule, "λείπει ο κανόνας CSS .dv-label"
+    margin = re.search(r"margin:\s*([^;]+);", rule.group(1))
+    assert margin and not any(v.startswith("-") for v in margin.group(1).split())
+    assert "margin-bottom: -" not in rule.group(1)
+
+
 # ================================================================ Δόση 1: καρτέλα «Μετρήσεις» (05, 06, 07)
 from davinci import element_06 as e06  # noqa: E402
 from davinci import element_07 as e07  # noqa: E402

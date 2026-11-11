@@ -284,7 +284,7 @@ class FakeSt:
         return self.values.get(key, df)
 
     def columns(self, n, **k):
-        return [self for _ in range(n)]
+        return [self for _ in range(n if isinstance(n, int) else len(n))]
 
     def tabs(self, names):
         """Κάθε καρτέλα γίνεται η ομάδα των πεδίων της (η εσωτερική καρτέλα υπερισχύει της εξωτερικής)."""
@@ -308,6 +308,24 @@ class FakeSt:
 
     def container(self, *a, **k):
         return Ctx()
+
+    def popover(self, label, *a, **k):
+        self.shown.append(("popover", (label,), k))
+        return Ctx()
+
+    def button(self, label, key=None, **k):
+        self.shown.append(("button", (label,), {"key": key, **k}))
+        self.placed.append(("button", label, self.group, bool(self.open_expanders), tuple(self.path)))
+        return bool(self.values.get(key, False))
+
+    def download_button(self, label, data, file_name=None, key=None, **k):
+        self.shown.append(("download_button", (label,), {"key": key, "file_name": file_name, "data": data, **k}))
+
+    def file_uploader(self, label, key=None, **k):
+        return self.values.get(key)
+
+    def rerun(self):
+        self.__dict__["reruns"] = self.__dict__.get("reruns", 0) + 1
 
     def expander(self, label, *a, **k):
         self.expanders.append(label)
@@ -411,7 +429,8 @@ def run_app(monkeypatch, values):
     mod = types.ModuleType("streamlit")
     mod.__dict__.update({n: getattr(fake, n) for n in (
         "date_input", "number_input", "radio", "selectbox", "checkbox", "data_editor", "columns", "tabs",
-        "expander", "container", "column_config", "session_state")})
+        "expander", "container", "column_config", "session_state", "popover", "button", "download_button",
+        "file_uploader", "rerun")})
     mod.__getattr__ = lambda name: getattr(fake, name)
     monkeypatch.setitem(sys.modules, "streamlit", mod)
     monkeypatch.setattr(al, "today", lambda: TODAY)
@@ -457,7 +476,7 @@ def test_screen_tabs_order_and_no_card_or_guides_tab(monkeypatch):
     rows = pd.DataFrame({"Ημερομηνία": pd.to_datetime([r[0] for r in WAIST]), "Τιμή": [r[1] for r in WAIST],
                          "Συσκευή / μέθοδος": ["μεζούρα"] * 4, "ISAK": [False] * 4})
     f = run_app(monkeypatch, {**WOMAN, "card_rows": rows, "card_waist": True, "aha": 500})
-    assert f.tab_sets[0] == ["Μέτρηση", "Αποτελέσματα", "Πλάνο"]
+    assert f.tab_sets[0] == ["Μέτρηση", "Αποτελέσματα", "Πλάνο", "Ιστορικό"]
     assert f.tab_sets[1] == ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"] and len(f.tab_sets) == 3
     assert f.tab_sets[2] == list(rv.TAB_TITLES)  # κουμπιά των «Αποτελεσμάτων»
     md = md_lines(f)
@@ -504,7 +523,7 @@ def test_screen_results_tabs_brief_colored_and_comments_inside_info(monkeypatch)
     assert not f.errors and not any("Στοιχεί" in t for _, t, _ in res) and not any("Φάση 1" in t for _, t, _ in res)
     assert not any("🎯" in t for _, t, _ in res)
     # έξω από το info: μόνο τιμές, στόχοι και «συμπλήρωσε …»· καμία προειδοποίηση, κανένα σχόλιο, καμία «Ενδεικτική»
-    assert all(kind in ("caption", "subheader", "markdown", "info") for kind, _, _ in res)
+    assert all(kind in ("caption", "subheader", "markdown", "info", "button") for kind, _, _ in res)
     outside = [t for kind, t, _ in res if kind == "markdown" and 'class="dv-info"' not in t]
     assert not any("Ενδεικτική" in t for t in outside)
     # το κουμπί γράφει μόνο «ⓘ info»· μέσα, τίτλος το όνομα του στοιχείου και ενότητες με τίτλο
@@ -538,6 +557,37 @@ def test_screen_results_missing_scale_values_say_what_to_fill(monkeypatch):
              if kind == "info" and path == ("Αποτελέσματα", "Σύσταση σώματος") and inside]
     assert "Για τις γραμμές που λείπουν συμπλήρωσε στη «Μέτρηση» → «Ζυγαριά»: Μύες %." in infos
     assert "**Σκελετικοί μύες:** δεν υπολογίστηκε" in md_lines(f)
+
+
+def test_screen_history_save_list_docx_backup_delete(monkeypatch):
+    # απόφαση του χρήστη (11/11/2026): ημερομηνία μέτρησης, καρτέλα «Ιστορικό» με μία μικρή καρτέλα ανά μέτρηση
+    # («1. ημερομηνία · kg · λίπος · μύες · υγρά»), «⋯» με εξαγωγή σε docx και διαγραφή, αντίγραφο σε αρχείο
+    from davinci import history as hist
+    vals = {**WOMAN, "aha": 500, "m_muscle": 28.0, "m_water": 45.0, "mdate": date(2026, 9, 1)}
+    f = run_app(monkeypatch, {**vals, "save_res": True})
+    saved = f.session_state["history"]
+    assert [e["date"] for e in saved] == ["2026-09-01"]
+    assert "Η μέτρηση αποθηκεύτηκε στο «Ιστορικό»." in f.texts()
+    assert any(t == "**1. 01/09/2026 · 72,0 kg · Λίπος 38,0% · Μύες 28,0% · Υγρά 45,0%**" for t in f.texts())
+    downs = {k["key"]: k for n, a, k in f.shown if n == "download_button"}
+    assert downs["docx_2026-09-01"]["file_name"] == "DaVinci_Metrisi_2026-09-01.docx"
+    assert downs["docx_2026-09-01"]["data"][:2] == b"PK"  # αρχείο Word (zip)
+    assert hist.from_json(downs["backup_down"]["data"]) == saved
+    assert ("popover", ("⋯",), {}) in f.shown and "Αποτελέσματα" in f.expanders
+    # η ημερομηνία μέτρησης είναι η ημερομηνία του υπολογισμού (ηλικία, έναρξη πλάνου)
+    assert saved[0]["input"]["today"] == "2026-09-01"
+    # δεύτερη συνεδρία: φόρτωση αντιγράφου, δεύτερη μέτρηση, διαγραφή της πρώτης
+    up = types.SimpleNamespace(name="a.json", getvalue=lambda: hist.to_json(saved).encode())
+    g = run_app(monkeypatch, {**vals, "mdate": date(2026, 10, 1), "weight": 70.0, "backup_up": up})
+    assert [e["date"] for e in g.session_state["history"]] == ["2026-09-01"] and g.__dict__.get("reruns") == 1
+    h = run_app(monkeypatch, {**vals, "mdate": date(2026, 10, 1), "weight": 70.0, "history": list(saved),
+                              "save_hist": True})
+    assert [e["date"] for e in h.session_state["history"]] == ["2026-09-01", "2026-10-01"]
+    assert any(t.startswith("**2. 01/10/2026 · 70,0 kg") for t in h.texts())
+    d = run_app(monkeypatch, {**vals, "history": list(h.session_state["history"]), "del_2026-09-01": True})
+    assert [e["date"] for e in d.session_state["history"]] == ["2026-10-01"]
+    bad = types.SimpleNamespace(name="b.json", getvalue=lambda: b"{}")
+    assert "Το αρχείο δεν είναι αντίγραφο του DaVinci Fitness." in run_app(monkeypatch, {**vals, "backup_up": bad}).errors
 
 
 def test_files_for_deployment_exist():

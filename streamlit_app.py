@@ -17,6 +17,7 @@ import streamlit as st  # noqa: E402
 from davinci import app_logic as al  # noqa: E402
 from davinci import element_01 as e01  # noqa: E402
 from davinci import element_44 as e44  # noqa: E402
+from davinci import history as hist  # noqa: E402
 from davinci import measurement  # noqa: E402
 from davinci import results_view as rv  # noqa: E402
 from davinci.fmt import num  # noqa: E402
@@ -83,7 +84,7 @@ details.dv-info[open] > summary {border-bottom: 1px solid rgba(255,255,255,.10);
 st.markdown(STYLE, unsafe_allow_html=True)
 st.title("DaVinci Fitness")
 st.caption("Επίπεδο Normal · απώλεια λίπους και συντήρηση. Η αύξηση μυών δεν περιλαμβάνεται ακόμη. "
-           "Τα δεδομένα δεν αποθηκεύονται: κλείνοντας τη σελίδα χάνονται.")
+           "Αποθηκευμένες μετρήσεις: στο «Ιστορικό». Κράτα αντίγραφο (αρχείο), γιατί κλείνοντας τη σελίδα χάνονται.")
 
 TODAY = al.today()
 
@@ -106,6 +107,8 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures, str | None]:
 
     with tabs["Προσωπικά"]:
         st.caption(AREAS[0][1])
+        mdate = st.date_input("Ημερομηνία μέτρησης", value=TODAY, min_value=date(1900, 1, 1), max_value=TODAY,
+                              format="DD/MM/YYYY", key="mdate") or TODAY
         birth = st.date_input("Ημερομηνία γέννησης", value=None, min_value=date(1900, 1, 1), max_value=TODAY,
                               format="DD/MM/YYYY", key="birth")
         sex = st.radio("Φύλο", e01.load_data()["sexes"], horizontal=True, key="sex")
@@ -121,11 +124,11 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures, str | None]:
             others = [c for c in groups if c != "5"]
             mixed = st.selectbox("Μικτή καταγωγή: ομάδα ενός γονέα (προαιρετικά)", [None, *others],
                                  format_func=lambda c: "Δεν διάλεξα" if c is None else groups[c], key="mixed")
-        profiles = (al.allowed_profiles(birth, TODAY) or ("Υγεία",)) if birth else e01.load_data()["profiles"]
+        profiles = (al.allowed_profiles(birth, mdate) or ("Υγεία",)) if birth else e01.load_data()["profiles"]
         profile = st.selectbox("Προφίλ", profiles, key="profile")
         training = st.checkbox("Προπόνηση με βάρη ή μικτή", key="training")
         pregnant = breastfeeding = False
-        if birth and e01.pregnancy_fields_visible(sex, e01.age_in_completed_years(birth, TODAY)):
+        if birth and e01.pregnancy_fields_visible(sex, e01.age_in_completed_years(birth, mdate)):
             pregnant = st.checkbox("Εγκυμοσύνη", key="pregnant")
             breastfeeding = st.checkbox("Θηλασμός", key="breastfeeding")
         pals = al.pal_options()
@@ -193,7 +196,7 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures, str | None]:
                               ("επίπεδο δραστηριότητας", pal)) if v is None]
     if missing:
         return None, m, "Συμπλήρωσε: " + ", ".join(missing) + "."
-    inp = al.PlanInput(birth_date=birth, sex=sex, height_cm=height, weight_kg=weight, fat_percent=fat, today=TODAY,
+    inp = al.PlanInput(birth_date=birth, sex=sex, height_cm=height, weight_kg=weight, fat_percent=fat, today=mdate,
                        ancestry=ancestry, mixed_chosen_group=mixed, profile=profile, resistance_training=training,
                        pregnant=pregnant, breastfeeding=breastfeeding, pal=float(pal), level=level)
     return inp, m, None
@@ -515,31 +518,105 @@ def hydration_inputs() -> dict:
                 urine_color=urine, thirst=thirst)
 
 
-def tab_results(inp: al.PlanInput, m: al.Measures) -> None:
+def tab_results(inp: al.PlanInput, m: al.Measures) -> tuple:
     st.caption("Αποτελέσματα από όσα συμπλήρωσες στην καρτέλα «Μέτρηση»· τα κενά πεδία παραλείπονται.")
     st.caption("▼ κόκκινο = πρέπει να πέσει · ▲ πράσινο = πρέπει να ανέβει · ⓘ info = στόχος, σχόλια και λεπτομέρειες")
     groups, errors = rv.results(inp, m)
     for e in errors:
         st.error(e)
     if not groups:
-        return
+        return ()
     # Κάθε κατηγορία σε δικό της κουμπί (απόφαση του χρήστη 11/11/2026)· η σειρά είναι πάντα η ίδια.
     for tab, group in zip(st.tabs([g.title for g in groups]), groups):
         with tab:
             show_group(group)
+    return groups
+
+
+# ------------------------------------------------------------------ ιστορικό (απόφαση του χρήστη 11/11/2026)
+def history() -> list[dict]:
+    return st.session_state.setdefault("history", [])
+
+
+def save_box(inp: al.PlanInput, m: al.Measures, groups, key: str) -> None:
+    """Κουμπί αποθήκευσης της τρέχουσας μέτρησης (στο τέλος των «Αποτελεσμάτων» και στην αρχή του «Ιστορικού»)."""
+    if st.button(f"Αποθήκευση μέτρησης {hist.day_text(inp.today.isoformat())}", key=key, type="primary"):
+        new, replaced = hist.add(history(), hist.snapshot(inp, m, groups))
+        st.session_state["history"] = new
+        st.success("Η μέτρηση αντικατέστησε την προηγούμενη της ίδιας ημερομηνίας." if replaced
+                   else "Η μέτρηση αποθηκεύτηκε στο «Ιστορικό».")
+
+
+def show_entry(entry: dict) -> None:
+    """Το αποτέλεσμα όπως αποθηκεύτηκε: όλες οι ενότητες κάθετα, με το «ⓘ info» κάθε στοιχείου."""
+    for g in entry["results"]:
+        st.markdown(f"#### {escape(g['title'])}")
+        for p in g["parts"]:
+            if len(g["parts"]) > 1 or p["heading"] != g["title"]:
+                st.markdown(f"**{escape(p['heading'])}**")
+            if p["lines"]:
+                st.markdown(BR.join(f"**{a}:** {b}" for a, b in p["lines"]))
+            cards = [hist.card_from(c) for c in p["cards"]]
+            for card in cards:
+                rows = "".join(row_html(r) for r in card.rows)
+                st.markdown(f'<div class="dv-small">{rows}</div>' if p["fold"] else rows, unsafe_allow_html=True)
+                if not p["fold"] and card.info:
+                    st.markdown(info_html([card]), unsafe_allow_html=True)
+            if p["fold"] and info_html(cards):
+                st.markdown(info_html(cards), unsafe_allow_html=True)
+
+
+def tab_history(inp: al.PlanInput | None, m: al.Measures, groups) -> None:
+    st.caption("Κάθε μέτρηση κρατά τα αποτελέσματα όπως βγήκαν εκείνη την ημέρα. Μία μέτρηση ανά ημερομηνία.")
+    if inp is not None and groups:
+        save_box(inp, m, groups, "save_hist")
+    entries = hist.ordered(history())
+    if not entries:
+        st.info("Δεν υπάρχουν αποθηκευμένες μετρήσεις. Συμπλήρωσε τη «Μέτρηση» και πάτα «Αποθήκευση μέτρησης».")
+    for i, entry in enumerate(entries, start=1):
+        with st.container(border=True):
+            left, right = st.columns([8, 1], vertical_alignment="center")
+            left.markdown(f"**{escape(hist.label(i, entry))}**")
+            with right.popover("⋯"):
+                st.download_button("Εξαγωγή σε docx", hist.to_docx(entry, i), file_name=hist.docx_name(entry),
+                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                   key=f"docx_{entry['date']}")
+                if st.button("Διαγραφή", key=f"del_{entry['date']}"):
+                    st.session_state["history"] = hist.remove(history(), entry["date"])
+                    st.rerun()
+            with st.expander("Αποτελέσματα"):
+                show_entry(entry)
+    st.divider()
+    st.markdown("**Αντίγραφο**")
+    st.caption("Μέχρι να συνδεθεί λογαριασμός, οι μετρήσεις κρατιούνται μόνο όσο είναι ανοιχτή η σελίδα. "
+               "Κατέβασε αντίγραφο μετά από κάθε αποθήκευση και φόρτωσέ το την επόμενη φορά.")
+    if entries:
+        st.download_button("Λήψη αντιγράφου", hist.to_json(entries), file_name="DaVinci_Istoriko.json",
+                           mime="application/json", key="backup_down")
+    up = st.file_uploader("Φόρτωση αντιγράφου (.json)", type=["json"], key="backup_up")
+    if up is not None and st.session_state.get("_loaded") != up.name:
+        try:
+            st.session_state["history"] = hist.merge(history(), hist.from_json(up.getvalue()))
+            st.session_state["_loaded"] = up.name
+            st.rerun()
+        except hist.BadBackup as e:
+            st.error(str(e))
 
 
 # ------------------------------------------------------------------ σελίδα
 # Σειρά καρτελών (απόφαση του χρήστη, 11/11/2026): Μέτρηση → Αποτελέσματα → Πλάνο.
 # Οι οδηγίες μέτρησης βρίσκονται μόνο στο ⓘ κάθε πεδίου· η κάρτα μέτρησης (Στοιχείο 45) δεν εμφανίζεται.
-tab_in, tab_res, tab_pl = st.tabs(["Μέτρηση", "Αποτελέσματα", "Πλάνο"])
+tab_in, tab_res, tab_pl, tab_hist = st.tabs(["Μέτρηση", "Αποτελέσματα", "Πλάνο", "Ιστορικό"])
 with tab_in:
     inputs, measures, todo = read_inputs()
     if todo:
         st.info(todo)
+groups = ()
 with tab_res:
     if inputs is not None:
-        tab_results(inputs, measures)
+        groups = tab_results(inputs, measures)
+        if groups:
+            save_box(inputs, measures, groups, "save_res")
     else:
         st.info(todo)
 with tab_pl:
@@ -547,3 +624,5 @@ with tab_pl:
         tab_plan(inputs)
     else:
         st.info(todo)
+with tab_hist:
+    tab_history(inputs, measures, groups)

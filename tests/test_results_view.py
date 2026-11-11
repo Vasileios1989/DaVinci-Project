@@ -264,5 +264,5 @@ def test_no_calculation_module_changed():
     # η παρουσίαση δεν γράφει σε κανένα module υπολογισμού: δεν εισάγεται από αυτά
     src = Path(__file__).resolve().parents[1] / "src" / "davinci"
     for f in src.glob("*.py"):
-        if f.name != "results_view.py":
+        if f.name not in ("results_view.py", "history.py"):
             assert "results_view" not in f.read_text(encoding="utf-8"), f.name

@@ -60,6 +60,24 @@ h1 {font-weight: 800; letter-spacing: -.01em;}
 .dv-sub {font-size: .92rem; opacity: .9;}
 .dv-target {font-size: .85rem; color: rgba(242,243,247,.55);}
 h3 {font-size: 1.15rem;}
+/* ⓘ info των «Αποτελεσμάτων»: ανοίγει / κλείνει· γράμματα με πατούρες, κανονικό μέγεθος, γκριζωπά, πυκνές γραμμές */
+details.dv-info {background: #262B42; border: 1px solid rgba(255,255,255,.10); border-radius: 14px;
+  margin: .1rem 0 .9rem 0; padding: 0;}
+details.dv-info > summary {cursor: pointer; padding: .45rem .9rem; font-size: .92rem; font-weight: 600;
+  color: rgba(242,243,247,.85); list-style: none;}
+details.dv-info > summary::-webkit-details-marker {display: none;}
+details.dv-info > summary::before {content: "▸"; display: inline-block; width: 1.1rem; opacity: .7;}
+details.dv-info[open] > summary::before {content: "▾";}
+details.dv-info[open] > summary {border-bottom: 1px solid rgba(255,255,255,.10);}
+.dv-info-body {padding: .55rem .95rem .7rem .95rem; font-family: Georgia, "Noto Serif", "Times New Roman", serif;
+  font-size: .95rem; line-height: 1.4; color: #C5C8D3;}
+.dv-info-body p {margin: 0 0 .3rem 0; font-size: .95rem; line-height: 1.4;}
+.dv-info-title {font-size: 1.02rem; font-weight: 700; color: #E6E8EF; margin: 0 0 .3rem 0;}
+.dv-info-title + .dv-info-title, .dv-info-body p + .dv-info-title {margin-top: .8rem;}
+.dv-info-h {font-size: .88rem; font-weight: 700; color: #DADDE6; margin: .55rem 0 .15rem 0;}
+/* αναλύσεις της άλιπης μάζας (μέσα στο κουτί που ανοίγει): μικρότερα γράμματα */
+.dv-small .dv-row {font-size: .9rem; margin-bottom: .5rem;}
+.dv-small .dv-sub {font-size: .84rem;} .dv-small .dv-target {font-size: .8rem;}
 </style>
 """
 st.markdown(STYLE, unsafe_allow_html=True)
@@ -420,37 +438,68 @@ def row_html(r: rv.Row) -> str:
     return f'<div class="dv-row dv-l{r.level}">' + "".join(out) + "</div>"
 
 
-def show_card(card: rv.Card) -> None:
-    """Οι γραμμές της κάρτας· οι προειδοποιήσεις και ό,τι λείπει ορατά· οι λεπτομέρειες και τα σχόλια στο ⓘ."""
-    st.markdown("".join(row_html(r) for r in card.rows), unsafe_allow_html=True)
-    if card.table and card.show_table:  # ο πίνακας της ανάλυσης άλιπης μάζας φαίνεται ως γραμμές (Α, Β)
+def info_html(cards) -> str:
+    """Το «ⓘ info»: ανοίγει και κλείνει. Μέσα, ανά κάρτα: τίτλος το όνομα του στοιχείου και από κάτω οι ενότητες
+    (Στόχος · Λεπτομέρειες · Ενδεικτική · Προειδοποιήσεις · Σχόλια). «» όταν δεν υπάρχει τίποτα να γραφτεί."""
+    blocks = []
+    for card in cards:
+        if not card.info:
+            continue
+        h = f'<div class="dv-info-title">{escape(card.title)}</div>'
+        for title, lines in card.info:
+            h += f'<div class="dv-info-h">{escape(title)}</div>'
+            h += "".join(f"<p>{(f'<b>{escape(a)}:</b> ' if a else '')}{escape(b)}</p>" for a, b in lines)
+        blocks.append(h)
+    if not blocks:
+        return ""
+    return ('<details class="dv-info"><summary>ⓘ info</summary><div class="dv-info-body">' + "".join(blocks)
+            + "</div></details>")
+
+
+def show_card(card: rv.Card, small: bool = False) -> None:
+    """Οι γραμμές της κάρτας και ό,τι λείπει ορατά· όλα τα κείμενα (σχόλια, «Ενδεικτική», προειδοποιήσεις) στο ⓘ.
+    small: μέσα σε ανάλυση που ανοίγει / κλείνει — μικρότερα γράμματα, και το ⓘ ένα, στο τέλος της ανάλυσης."""
+    rows = "".join(row_html(r) for r in card.rows)
+    st.markdown(f'<div class="dv-small">{rows}</div>' if small else rows, unsafe_allow_html=True)
+    if card.table and card.show_table:  # ο πίνακας της ανάλυσης άλιπης μάζας φαίνεται ως γραμμές
         head, *body = card.table
         st.dataframe([dict(zip(head, r)) for r in body], hide_index=True)
     for n in card.needs:
         st.info(n)
-    if card.indicative:
-        st.warning("Ενδεικτική")
-    for w in card.warnings:
-        st.warning(w)
-    if card.info_lines or card.messages:
-        with st.expander(f"ⓘ {card.title}"):
-            if card.info_lines:
-                st.markdown(BR.join(f"**{label}:** {v}" for label, v in card.info_lines))
-            for m in card.messages:
-                st.write(m)
+    if not small and card.info:
+        st.markdown(info_html([card]), unsafe_allow_html=True)
+
+
+def show_part(part: rv.Part) -> None:
+    if part.todo:
+        st.info(part.todo)
+    if part.lines:
+        st.markdown(BR.join(f"**{label}:** {v}" for label, v in part.lines))
+    for card in part.cards:
+        show_card(card, small=part.fold)
+    if part.fold:
+        info = info_html(part.cards)
+        if info:
+            st.markdown(info, unsafe_allow_html=True)
 
 
 def show_group(group: rv.Group) -> None:
-    with st.container(border=True):
-        st.subheader(group.heading or group.title)
-        if group.todo:
-            st.info(group.todo)
-        if group.lines:
-            st.markdown(BR.join(f"**{label}:** {v}" for label, v in group.lines))
-        for card in group.cards:
-            show_card(card)
-        if not (group.cards or group.lines):
-            st.info("Δεν υπάρχουν αποτελέσματα εδώ: συμπλήρωσε τις μετρήσεις αυτής της κατηγορίας στη «Μέτρηση».")
+    """Κάθε μέρος σε δικό του πλαίσιο με επικεφαλίδα· τα μέρη που ανοίγουν / κλείνουν (αναλύσεις της άλιπης
+    μάζας) μπαίνουν στο τέλος του προηγούμενου πλαισίου, δηλαδή κάτω από την Άλιπη μάζα."""
+    parts, i = group.parts, 0
+    while i < len(parts):
+        j = i + 1
+        while j < len(parts) and parts[j].fold:
+            j += 1
+        with st.container(border=True):
+            st.subheader(parts[i].heading)
+            show_part(parts[i])
+            for fold in parts[i + 1:j]:
+                with st.expander(fold.heading):
+                    show_part(fold)
+        i = j
+    if not (group.cards or group.lines):
+        st.info("Δεν υπάρχουν αποτελέσματα εδώ: συμπλήρωσε τις μετρήσεις αυτής της κατηγορίας στη «Μέτρηση».")
 
 
 def hydration_inputs() -> dict:
@@ -468,7 +517,7 @@ def hydration_inputs() -> dict:
 
 def tab_results(inp: al.PlanInput, m: al.Measures) -> None:
     st.caption("Αποτελέσματα από όσα συμπλήρωσες στην καρτέλα «Μέτρηση»· τα κενά πεδία παραλείπονται.")
-    st.caption("▼ κόκκινο = πρέπει να πέσει · ▲ πράσινο = πρέπει να ανέβει · ⓘ = σχόλια και λεπτομέρειες")
+    st.caption("▼ κόκκινο = πρέπει να πέσει · ▲ πράσινο = πρέπει να ανέβει · ⓘ info = στόχος, σχόλια και λεπτομέρειες")
     groups, errors = rv.results(inp, m)
     for e in errors:
         st.error(e)

@@ -105,12 +105,16 @@ def test_clean_text_removes_only_the_element_reference():
 def test_order_follows_the_report():
     groups, _ = rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])
     assert [g.title for g in groups] == list(rv.TAB_TITLES) == [
-        "Βασικά", "Σύσταση", "Ιστοί (Α)", "Συστατικά (Β)", "Δείκτες", "Κορμός", "Άκρα", "Αναλογίες κορμού",
-        "Αναλογίες άκρων", "Άλλα"]
-    by = {g.title: [r.name for c in g.cards for r in c.rows] for g in groups}
+        "Σύσταση σώματος", "Κορμός", "Άκρα", "Αναλογίες κορμού", "Αναλογίες άκρων", "Άλλα"]
+    body = groups[0]
+    assert [(p.key, p.heading, p.fold) for p in body.parts] == [
+        ("Βασικά", "Βασικά στοιχεία", False), ("Σύσταση", "Σύσταση σώματος", False),
+        ("Ιστοί", "Άλιπη σε ιστούς", True), ("Συστατικά", "Άλιπη σε συστατικά", True), ("Δείκτες", "Δείκτες", False)]
+    assert body.part("Σύσταση").cards[-1].title == "Άλιπη μάζα"  # οι αναλύσεις ακριβώς κάτω από την Άλιπη μάζα
+    by = {p.key: [r.name for c in p.cards for r in c.rows] for g in groups for p in g.parts}
     assert by["Σύσταση"] == ["Βάρος", "Λίπος", "Σπλαχνικό λίπος (Εκτίμηση)", "Άλιπη μάζα"]
-    assert by["Ιστοί (Α)"] == ["Σκελετικοί μύες", "Ξηροί μύες (εκτίμηση)", "Λοιποί ιστοί"]
-    assert by["Συστατικά (Β)"] == ["Νερό", "Ξηρή άλιπη μάζα", "Οστικά μέταλλα", "Λοιπά", "Πρωτεΐνη (τυπική τιμή)",
+    assert by["Ιστοί"] == ["Σκελετικοί μύες", "Ξηροί μύες (εκτίμηση)", "Λοιποί ιστοί"]
+    assert by["Συστατικά"] == ["Νερό", "Ξηρή άλιπη μάζα", "Οστικά μέταλλα", "Λοιπά", "Πρωτεΐνη (τυπική τιμή)",
                                    "Γλυκογόνο (τυπική τιμή)", "Άλλα μέταλλα (τυπική τιμή)", "Διαφορά"]
     assert by["Δείκτες"] == ["Λόγος μυών / λίπους", "Λόγος άλιπης / λίπους", "Δείκτης Άλιπης Μάζας (ΔΑΜ)",
                              "Κανονικοποιημένος ΔΑΜ", "ΔΜΣ"]
@@ -121,8 +125,7 @@ def test_order_follows_the_report():
                                       "Λόγος ώμων / μέσης"]
     assert by["Αναλογίες άκρων"] == ["Λόγος πήχη / δικεφάλου", "Λόγος μηρού / γάμπας", "Λόγος καρπού / δικεφάλου",
                                      "Λόγος μηρού / γονάτου", "Λόγος αστραγάλου / γάμπας"]
-    heads = {g.title: g.heading for g in groups}
-    assert heads["Ιστοί (Α)"] == "Α. Άλιπη μάζα σε ιστούς" and heads["Συστατικά (Β)"] == "Β. Άλιπη μάζα σε συστατικά"
+    assert all(len(g.parts) == 1 and not g.parts[0].fold for g in groups[1:])
 
 
 def rows_of(groups):
@@ -172,21 +175,56 @@ def test_change_rules():
 
 def test_missing_lines_say_what_to_fill():
     groups, _ = rv.results(person(), al.Measures())
-    g = {x.title: x for x in groups}
+    g = {p.key: p for x in groups for p in x.parts}
     r = rows_of(groups)
     assert r["Σκελετικοί μύες"].value is None and r["Λοιποί ιστοί"].value is None
-    assert g["Ιστοί (Α)"].todo == "Για τις γραμμές που λείπουν συμπλήρωσε στη «Μέτρηση» → «Ζυγαριά»: Μύες %."
+    assert g["Ιστοί"].todo == "Για τις γραμμές που λείπουν συμπλήρωσε στη «Μέτρηση» → «Ζυγαριά»: Μύες %."
     assert r["Ξηρή άλιπη μάζα"].value is None and r["Νερό"].value.endswith("(υπολογισμένη)")
-    assert g["Συστατικά (Β)"].todo.endswith(": Οστά %, Υγρά %.") or g["Συστατικά (Β)"].todo.endswith(": Υγρά %, Οστά %.")
-    full = {x.title: x for x in rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])[0]}
-    assert full["Ιστοί (Α)"].todo is None and full["Συστατικά (Β)"].todo is None
+    assert g["Συστατικά"].todo.endswith(": Οστά %, Υγρά %.") or g["Συστατικά"].todo.endswith(": Υγρά %, Οστά %.")
+    full = {p.key: p for x in rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])[0] for p in x.parts}
+    assert full["Ιστοί"].todo is None and full["Συστατικά"].todo is None
 
 
-def test_ab_letters_follow_the_screen_headings():
+def test_analysis_message_names_the_screen_headings_without_letters():
     groups, _ = rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])
     msgs = [m for g in groups for c in g.cards for m in c.messages]
-    assert any(m.startswith("Δύο τρόποι ανάλυσης") and rv._AB_SCREEN in m for m in msgs)
+    two = next(m for m in msgs if m.startswith("Δύο τρόποι ανάλυσης"))
+    assert rv._AB_SCREEN in two and " Α " not in two and " Β " not in two and "του Α" not in two
     assert not any(rv._AB_CODE in m for m in msgs)
+
+
+@pytest.mark.parametrize("name", CASES)
+def test_info_has_titled_sections_and_keeps_every_text(name):
+    groups, _ = rv.results(*CASES[name])
+    for c in cards(groups):
+        titles = [t for t, _ in c.info]
+        assert set(titles) <= {"Στόχος", "Λεπτομέρειες", "Ενδεικτική", "Προειδοποιήσεις", "Σχόλια"}
+        assert all(lines for _, lines in c.info)  # τίτλος χωρίς περιεχόμενο δεν υπάρχει
+        assert ("Ενδεικτική" in titles) == c.indicative
+        inside = [ln for _, lines in c.info for ln in lines]
+        texts = [b for a, b in inside if not a]
+        for x in (*c.messages, *c.warnings):  # κάθε σχόλιο και προειδοποίηση μία φορά μέσα στο info
+            assert texts.count(x) == 1, (c.title, x)
+        assert [ln for ln in inside if ln[0]] == list(c.info_lines) or \
+            sorted(ln for ln in inside if ln[0]) == sorted(c.info_lines)
+
+
+def test_indicative_reason_is_written_inside_the_info():
+    inp = person(ancestry=None, profile="Υγεία", resistance_training=False)
+    c = {x.title: x for x in cards(rv.results(inp, al.Measures())[0])}
+    why = dict(c["Λίπος"].info)["Ενδεικτική"]
+    assert any("Δεν δηλώθηκε καταγωγή" in b for _, b in why)
+    generic = [x for x in cards(rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])[0])
+               if x.indicative and dict(x.info)["Ενδεικτική"] == (("", rv.INDICATIVE_GENERIC),)]
+    assert all(not any(rv._says_indicative(m) for m in (*x.messages, *x.why)) for x in generic)
+
+
+def test_health_profile_shows_a_range_like_the_other_profiles():
+    inp = person(weight_kg=140.0, fat_percent=42.5, height_cm=180.0, profile="Υγεία", resistance_training=False,
+                 birth_date=date(1990, 1, 1))
+    w = rows_of(rv.results(inp, al.Measures())[0])["Βάρος"]
+    assert w.target == "≈ 84,0 kg έως ≈ 58,8 kg"
+    assert w.change.parts == (("down", "▼ −56,0 kg έως −81,2 kg, −40,0% έως −58,0%"),)
 
 
 def test_basics_and_start_values_come_from_the_code():
@@ -198,7 +236,8 @@ def test_basics_and_start_values_come_from_the_code():
     prep = al.prepare(inp)
     points = al._targets(inp.weight_kg, inp.fat_percent, prep.user)
     assert c["Βάρος"].main == (("Σήμερα", "138,9 kg"),)
-    assert c["Βάρος"].targets == (("Βάρος-στόχος (Φάση 1)", "≈ 79,2 kg (−59,7) → ≈ 67,8 kg (−71,1)"),)
+    assert c["Βάρος"].targets == (("Βάρος-στόχος", "≈ 79,2 kg (−59,7) → ≈ 67,8 kg (−71,1)"),)
+    assert not any("Φάση 1" in x for card in c.values() for ln in (*card.main, *card.targets, *card.details) for x in ln)
     assert [round(p.weight_kg, 1) for p in points] == [79.2, 67.8]  # οι τιμές του Στοιχείου 03, όχι νέος υπολογισμός
     assert c["Λίπος"].main == (("Σήμερα", "43,2% · 60,0 kg"), ("Ταξινόμηση", prep.fat.health_label))
     assert c["Λίπος"].targets == (("Εύρος λίπους του προφίλ", "6,0–13,0%"),)

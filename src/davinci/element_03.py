@@ -107,7 +107,9 @@ def weight_target(weight_kg: float, fat_percent: float, user: e01.UserCategories
 
     if user.profile == "Υγεία":
         if fat_percent > rng[1]:
-            targets = [rng[1]]  # Κανόνας 1
+            # Εύρος και στην Υγεία, όπως στα άλλα προφίλ: ανώτατο και κατώτατο υγιές λίπος
+            # (σύμβαση συστήματος, απόφαση του χρήστη 11/11/2026· πριν: μόνο το ανώτατο, Κανόνας 1)
+            targets = [rng[1], rng[0]]
         elif fat_percent < rng[0]:
             targets = [rng[0]]  # σύμβαση: πλησιέστερο σημείο εισόδου (βλ. data, conventions)
         else:

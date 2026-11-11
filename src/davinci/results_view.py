@@ -2,7 +2,10 @@
 
 Δεν αλλάζει κανέναν υπολογισμό. Παίρνει τις ενότητες του `app_logic.measurement_sections` και την αφετηρία του
 `app_logic.prepare` όπως είναι και τις μοιράζει σε καρτέλες (κουμπιά), με τη σειρά:
-Βασικά · Σύσταση · Ιστοί (Α) · Συστατικά (Β) · Δείκτες · Κορμός · Άκρα · Αναλογίες κορμού · Αναλογίες άκρων · Άλλα.
+Σύσταση σώματος · Κορμός · Άκρα · Αναλογίες κορμού · Αναλογίες άκρων · Άλλα.
+Η «Σύσταση σώματος» έχει μέρη: Βασικά στοιχεία · Σύσταση σώματος (με την «Άλιπη σε ιστούς» και την «Άλιπη σε
+συστατικά» κάτω από την Άλιπη μάζα, να ανοίγουν και να κλείνουν) · Δείκτες (απόφαση του χρήστη 11/11/2026, 3η).
+Το ⓘ κάθε κάρτας (`Card.info`) έχει τίτλους: Στόχος · Λεπτομέρειες · Ενδεικτική · Προειδοποιήσεις · Σχόλια.
 
 Κάθε κάρτα έχει δύο όψεις:
 - την πλήρη καταγραφή (`main`, `targets`, `details`, `messages`, `warnings`, `table`): κάθε γραμμή του κώδικα
@@ -15,8 +18,8 @@
 (εκτίμηση, όχι στόχος), η λέξη μένει.
 
 Αλλαγές στα κείμενα: οι αναφορές σε αριθμούς στοιχείων («(Στοιχείο 05)», «των Στοιχείων 15 και 16») δεν
-εμφανίζονται, και στο μήνυμα της ανάλυσης άλιπης μάζας τα γράμματα Α / Β ακολουθούν τις επικεφαλίδες της οθόνης
-(Α = ιστοί, Β = συστατικά) (`clean_text`).
+εμφανίζονται, το «(Φάση 1)» δεν εμφανίζεται, και στο μήνυμα της ανάλυσης άλιπης μάζας αντί για τα γράμματα Α / Β
+γράφονται οι επικεφαλίδες της οθόνης («Άλιπη σε συστατικά», «Άλιπη σε ιστούς») (`clean_text`).
 """
 
 from __future__ import annotations
@@ -40,9 +43,12 @@ _ELEMENT = re.compile(r"\s*\(Στοιχεί[οα] [^)]*\)$")
 _ELEMENT_ANYWHERE = re.compile(r"\s*\(Στοιχεί[οα] [^)]*\)")
 _ELEMENT_IN_LIST = re.compile(r", Στοιχεί[οα] [^,)]*(?=\))")
 _ELEMENTS_GENITIVE = re.compile(r" των Στοιχείων \d+ και \d+| του Στοιχείου \d+")
-# Στοιχείο 03, μήνυμα της ανάλυσης: στην οθόνη Α = ιστοί, Β = συστατικά (απόφαση του χρήστη 11/11/2026)
-_AB_CODE = "Ο Α δείχνει από τι υλικό αποτελείται και ο Β από ποιους ιστούς"
-_AB_SCREEN = "Ο Α δείχνει από ποιους ιστούς αποτελείται και ο Β από τι υλικό"
+# Στοιχείο 03, μήνυμα της ανάλυσης: στην οθόνη χωρίς γράμματα Α / Β (απόφαση του χρήστη 11/11/2026, 3η)
+_AB_CODE = ("Ο Α δείχνει από τι υλικό αποτελείται και ο Β από ποιους ιστούς. "
+            "Οι γραμμές του Α δεν προστίθενται με τις γραμμές του Β")
+_AB_SCREEN = ("Η «Άλιπη σε συστατικά» δείχνει από τι υλικό αποτελείται και η «Άλιπη σε ιστούς» από ποιους ιστούς. "
+              "Οι γραμμές της μίας δεν προστίθενται με τις γραμμές της άλλης")
+_PHASE1 = " (Φάση 1)"
 
 
 def clean_title(title: str) -> str:
@@ -55,7 +61,7 @@ def clean_text(text: str) -> str:
     text = _ELEMENT_ANYWHERE.sub("", text)
     text = _ELEMENT_IN_LIST.sub("", text)  # «(από το εύρος αγκώνα, Στοιχείο 32)» → «(από το εύρος αγκώνα)»
     text = _ELEMENTS_GENITIVE.sub("", text)  # «με τις εκτιμήσεις των Στοιχείων 15 και 16 (…)» → «με τις εκτιμήσεις (…)»
-    return text.replace(_AB_CODE, _AB_SCREEN)
+    return text.replace(_AB_CODE, _AB_SCREEN).replace(_PHASE1, "")
 
 
 def _clean_lines(lines) -> tuple[Line, ...]:
@@ -97,16 +103,37 @@ class Card:
     needs: tuple[str, ...] = ()  # σχόλια «χρειάζεται …» μιας κάρτας χωρίς τιμή: ορατά, όχι στο ⓘ
     info_lines: tuple[Line, ...] = ()  # γραμμές του ⓘ (όσες δεν φαίνονται αυτούσιες στις γραμμές της οθόνης)
     show_table: bool = True  # False: ο πίνακας φαίνεται ως γραμμές (ανάλυση άλιπης μάζας)
+    why: tuple[str, ...] = ()  # κάρτα χωρίς τα σχόλια της ενότητάς της: ο λόγος της «Ενδεικτικής»
+    info: tuple[tuple[str, tuple[Line, ...]], ...] = ()  # το ⓘ σε ενότητες: (τίτλος, γραμμές)· ετικέτα «» = πρόταση
+
+
+@dataclass(frozen=True)
+class Part:
+    """Ένα μέρος μιας καρτέλας, με δική του επικεφαλίδα."""
+    key: str
+    heading: str
+    cards: tuple[Card, ...] = ()
+    lines: tuple[Line, ...] = ()  # μόνο στα «Βασικά στοιχεία»
+    todo: str | None = None  # «Συμπλήρωσε …» για γραμμές που δεν υπολογίστηκαν
+    fold: bool = False  # ανοίγει / κλείνει κάτω από το προηγούμενο μέρος, με μικρότερα γράμματα
 
 
 @dataclass(frozen=True)
 class Group:
     """Μία καρτέλα (κουμπί) των «Αποτελεσμάτων»."""
-    title: str  # σύντομο όνομα κουμπιού
-    heading: str = ""
-    cards: tuple[Card, ...] = ()
-    lines: tuple[Line, ...] = ()  # μόνο στα «Βασικά»
-    todo: str | None = None  # «Συμπλήρωσε …» για γραμμές που δεν υπολογίστηκαν
+    title: str  # όνομα κουμπιού
+    parts: tuple[Part, ...] = ()
+
+    @property
+    def cards(self) -> tuple[Card, ...]:
+        return tuple(c for p in self.parts for c in p.cards)
+
+    @property
+    def lines(self) -> tuple[Line, ...]:
+        return tuple(ln for p in self.parts for ln in p.lines)
+
+    def part(self, key: str) -> Part:
+        return next(p for p in self.parts if p.key == key)
 
 
 @dataclass(frozen=True)
@@ -177,7 +204,7 @@ TABS: tuple[tuple[str, str, tuple[Spec, ...]], ...] = (
         Spec("Άλιπη μάζα", (_FFMI,), ("Άλιπη μάζα",), ("Άλιπη μάζα-στόχος",), owner=False,
              rows=(R("Άλιπη μάζα", "Άλιπη μάζα", ("Άλιπη μάζα-στόχος",)),)),
     )),
-    ("Ιστοί (Α)", "Α. Άλιπη μάζα σε ιστούς", (
+    ("Ιστοί", "Άλιπη σε ιστούς", (
         Spec(_MUSCLE, (_MUSCLE,), ("Σκελετικοί μύες",), always=True, rows=(
             R(_MUSCLE, _MUSCLE, ("Ενδεικτικός στόχος μυών",), "Ενδεικτικός στόχος", subs=("Ταξινόμηση",),
               pct=_MUSCLE),
@@ -185,7 +212,7 @@ TABS: tuple[tuple[str, str, tuple[Spec, ...]], ...] = (
         Spec("Λοιποί ιστοί", (_ANALYSIS,), owner=False, always=True,
              rows=(R("Λοιποί ιστοί", table="Λοιποί ιστοί"),)),
     )),
-    ("Συστατικά (Β)", "Β. Άλιπη μάζα σε συστατικά", (
+    ("Συστατικά", "Άλιπη σε συστατικά", (
         Spec("Νερό", ("Υγρά",), ("Υγρά",), rows=(
             R("Νερό", "Υγρά", ("Ενδεικτικός στόχος υγρών",), "Ενδεικτικός στόχος", pct="Νερό", show_label=False),)),
         Spec("Ξηρή άλιπη μάζα", (_ANALYSIS,), owner=False, always=True,
@@ -263,8 +290,12 @@ TABS: tuple[tuple[str, str, tuple[Spec, ...]], ...] = (
         Spec("Ενυδάτωση", ("Ενυδάτωση",), ("Ενυδάτωση",)),
     )),
 )
-BASICS, OTHER = "Βασικά", "Άλλα"
-TAB_TITLES = (BASICS, *(t for t, _, _ in TABS))
+BASICS, OTHER, BODY = "Βασικά", "Άλλα", "Σύσταση σώματος"
+BODY_PARTS = ("Σύσταση", "Ιστοί", "Συστατικά", "Δείκτες")  # μέρη της καρτέλας «Σύσταση σώματος», μετά τα «Βασικά»
+FOLDS = ("Ιστοί", "Συστατικά")  # κάτω από την Άλιπη μάζα· ανοίγουν και κλείνουν
+TAB_TITLES = (BODY, *(t for t, _, _ in TABS if t not in BODY_PARTS))
+INDICATIVE = "Ενδεικτική"
+INDICATIVE_GENERIC = ("Η τιμή είναι εκτίμηση: ο υπολογισμός έγινε με γενικό μοντέλο ή με λιγότερα στοιχεία.")
 TODO = {  # γραμμές που δεν υπολογίστηκαν → πεδία της «Μέτρησης» (περιοχή «Ζυγαριά»)
     _MUSCLE: "Μύες %", "Ξηροί μύες": "Μύες %", "Λοιποί ιστοί": "Μύες %",
     "Ξηρή άλιπη μάζα": "Υγρά %", "Λοιπά": "Υγρά %, Οστά %", "Διαφορά": "Υγρά %, Οστά %",
@@ -290,7 +321,7 @@ def start_sections(inp: al.PlanInput) -> tuple[al.Section, ...]:
     w = inp.weight_kg
     lines: list[Line] = [("Σήμερα", f"{num(w, 1)} kg")]
     if points:
-        lines.append(("Βάρος-στόχος (Φάση 1)", " → ".join(
+        lines.append(("Βάρος-στόχος", " → ".join(
             f"≈ {num(p.weight_kg, 1)} kg ({al._signed(p.weight_kg - w)})" for p in points)))
     out = [al.Section(WEIGHT, tuple(lines))]
 
@@ -443,8 +474,32 @@ def _cards(specs: tuple[Spec, ...], by_title: dict[str, al.Section], taken: dict
                                  tuple(map(clean_text, sec.messages)) if spec.owner else (),
                                  tuple(map(clean_text, sec.warnings)) if spec.owner else (),
                                  sec.indicative,
-                                 sec.table if spec.owner else ())))
+                                 sec.table if spec.owner else (),
+                                 why=() if spec.owner else tuple(
+                                     clean_text(x) for x in sec.messages if _says_indicative(x)))))
     return cards
+
+
+def _says_indicative(message: str) -> bool:
+    return "νδεικτικ" in message
+
+
+def _info(card: Card, info_lines: tuple[Line, ...], messages: tuple[str, ...]
+          ) -> tuple[tuple[str, tuple[Line, ...]], ...]:
+    """Το ⓘ σε ενότητες με τίτλο· ενότητα χωρίς περιεχόμενο δεν εμφανίζεται.
+    «Ενδεικτική»: τα σχόλια της ενότητας που το γράφουν· αν κανένα δεν το γράφει, μία γενική πρόταση."""
+    targets = tuple(ln for ln in info_lines if ln in card.targets)
+    details = tuple(ln for ln in info_lines if ln not in card.targets)
+    why = tuple(m for m in messages if _says_indicative(m)) if card.indicative else ()
+    comments = tuple(m for m in messages if m not in why)
+    why = why or card.why
+    if card.indicative and not why:
+        why = (INDICATIVE_GENERIC,)
+    sections = (("Στόχος", targets), ("Λεπτομέρειες", details),
+                (INDICATIVE, tuple(("", m) for m in why) if card.indicative else ()),
+                ("Προειδοποιήσεις", tuple(("", w) for w in card.warnings)),
+                ("Σχόλια", tuple(("", m) for m in comments)))
+    return tuple((title, lines) for title, lines in sections if lines)
 
 
 def _claims(spec: Spec, label: str) -> bool:
@@ -564,7 +619,7 @@ def results(inp: al.PlanInput, m: al.Measures) -> tuple[tuple[Group, ...], tuple
     fixed = _fixed_targets(inp, by_title)
     every = tuple(s for _, _, specs in TABS for s in specs)
     taken: dict[str, set[int]] = {}
-    groups = [Group(BASICS, "Βασικά στοιχεία", lines=basics(inp, sections))]
+    parts: list[Part] = [Part(BASICS, "Βασικά στοιχεία", lines=basics(inp, sections))]
     known = {s for spec in every if spec.owner for s in spec.source}
     for title, heading, specs in TABS:
         cards = []
@@ -574,22 +629,25 @@ def results(inp: al.PlanInput, m: al.Measures) -> tuple[tuple[Group, ...], tuple
             info = tuple(ln for ln in (*card.main, *card.targets, *card.details) if ln not in shown)
             if spec.rows is not None:  # οι στόχοι φαίνονται συμπτυγμένοι· αυτούσιοι στο ⓘ
                 info = (*info, *(ln for ln in card.targets if ln not in info))
-            cards.append(Card(card.title, card.main, card.targets, card.details,
-                              tuple(x for x in card.messages if x not in needs), card.warnings, card.indicative,
-                              card.table, rows, needs, info, spec.rows is None))
+            messages = tuple(x for x in card.messages if x not in needs)
+            cards.append(Card(card.title, card.main, card.targets, card.details, messages, card.warnings,
+                              card.indicative, card.table, rows, needs, info, spec.rows is None, card.why,
+                              _info(card, info, messages)))
         if title == OTHER:
             for s in sections:
                 if clean_title(s.title) not in known:  # ό,τι δεν έχει θέση: κρατιέται, δεν χάνεται
                     lines = _clean_lines(s.lines)
-                    cards.append(Card(clean_title(s.title), lines[:1], (), lines[1:],
-                                      tuple(map(clean_text, s.messages)), tuple(map(clean_text, s.warnings)),
-                                      s.indicative, s.table,
-                                      (Row(clean_title(s.title), lines[0][1] if lines else None),), (),
-                                      lines[1:]))
+                    c = Card(clean_title(s.title), lines[:1], (), lines[1:],
+                             tuple(map(clean_text, s.messages)), tuple(map(clean_text, s.warnings)),
+                             s.indicative, s.table,
+                             (Row(clean_title(s.title), lines[0][1] if lines else None),), (), lines[1:])
+                    cards.append(Card(**{**c.__dict__, "info": _info(c, c.info_lines, c.messages)}))
         missing = sorted({TODO[r.name] for c in cards for r in c.rows if r.value is None and r.name in TODO})
         todo = None
         if missing:
             fields = ", ".join(dict.fromkeys(f.strip() for x in missing for f in x.split(",")))
             todo = f"Για τις γραμμές που λείπουν συμπλήρωσε στη «Μέτρηση» → «Ζυγαριά»: {fields}."
-        groups.append(Group(title, heading, tuple(cards), todo=todo))
+        parts.append(Part(title, heading, tuple(cards), todo=todo, fold=title in FOLDS))
+    body = tuple(p for p in parts if p.key == BASICS or p.key in BODY_PARTS)
+    groups = [Group(BODY, body), *(Group(p.key, (p,)) for p in parts if p not in body)]
     return tuple(groups), ()

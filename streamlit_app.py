@@ -158,10 +158,22 @@ def sign_in_done(s: cloud.Session, remember: bool = False, rerun: bool = True) -
 
 
 def resume() -> None:
-    """Πριν από την οθόνη εισόδου: επιστροφή από τη Google (?code=…&dv=…) ή «Να με θυμάσαι» (cookie)."""
+    """Πριν από την οθόνη εισόδου: επιστροφή από τη Google (?code=…&dv=…) ή «Να με θυμάσαι» (cookie).
+    Κάθε αποτυχία γράφει τον λόγο στην οθόνη (και στα logs του Streamlit)."""
     qp = getattr(st, "query_params", None)
-    code, nonce = (qp.get("code"), qp.get("dv")) if qp is not None else (None, None)
-    if code and nonce:
+    params = {k: qp.get(k) for k in ("code", "dv", "error", "error_code", "error_description")} if qp is not None else {}
+    code, nonce = params.get("code"), params.get("dv")
+    failed = cloud.oauth_error(params)
+    if failed:  # η Google ή το Supabase αρνήθηκαν
+        qp.clear()
+        st.error(failed)
+    elif code and session() is not None:  # ο ίδιος κωδικός ξανά (διπλή εκτέλεση): είσαι ήδη συνδεδεμένος
+        qp.clear()
+        return
+    elif code and not nonce:
+        qp.clear()
+        st.error(cloud.OAUTH_NO_KEY)
+    elif code and nonce:
         s = cloud_call(lambda: CLOUD.google_finish(code, nonce))
         qp.clear()
         if s:
@@ -172,7 +184,8 @@ def resume() -> None:
         st.session_state["_cookie_tried"] = True
         try:
             s = CLOUD.remembered(token)
-        except cloud.CloudError:
+        except cloud.CloudError as e:
+            print(f"[DaVinci] «Να με θυμάσαι»: {e.detail or e}", file=sys.stderr)
             write_cookie(None)  # έληξε: ζητείται ξανά σύνδεση, χωρίς μήνυμα λάθους
         else:
             sign_in_done(s, remember=True, rerun=False)
@@ -234,7 +247,7 @@ def entry_screen() -> None:
     st.stop()
 
 
-if CLOUD is not None and not st.session_state.get("mode"):
+if CLOUD is not None and (not st.session_state.get("mode") or st.query_params.get("code")):
     resume()
 if CLOUD is not None and not st.session_state.get("mode"):
     entry_screen()

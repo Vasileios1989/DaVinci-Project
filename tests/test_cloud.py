@@ -112,3 +112,31 @@ def test_google_sign_in_with_pkce():
         c.google_finish(back["code"][0], back["dv"][0])  # το κλειδί ισχύει μία φορά
     conf = {"supabase": {"url": "https://x.supabase.co", "key": "k", "app_url": "https://app.streamlit.app"}}
     assert cloud.from_secrets(conf).app_url == "https://app.streamlit.app"
+
+
+def test_unknown_errors_show_supabase_reason():
+    # Ο λόγος του Supabase φαίνεται όταν δεν έχουμε δικό μας μήνυμα (π.χ. απόρριψη στην πύλη πριν από το Auth)
+    c = cloud.Supabase("https://x.supabase.co", "pk", lambda *a: (401, b'{"message":"Invalid API key"}'))
+    with pytest.raises(cloud.CloudError) as e:
+        c.sign_in("a@b.gr", "12345678")
+    assert "Supabase 401" in str(e.value) and "Invalid API key" in str(e.value)
+    assert "POST /auth/v1/token?grant_type=password" in str(e.value)
+    html = cloud.Supabase("https://x.supabase.co", "pk", lambda *a: (404, b"<html>no Route matched</html>"))
+    with pytest.raises(cloud.CloudError, match="no Route matched"):
+        html.recover("a@b.gr")
+    odd = cloud.Supabase("https://x.supabase.co", "pk", lambda *a: (200, b"<html>"))
+    with pytest.raises(cloud.CloudError, match="όχι JSON"):
+        odd.sign_in("a@b.gr", "12345678")
+    empty = cloud.Supabase("https://x.supabase.co", "pk", lambda *a: (200, b'{"user": {}}'))
+    with pytest.raises(cloud.CloudError, match="πεδία: user"):
+        empty.sign_in("a@b.gr", "12345678")
+    known = cloud.Supabase("https://x.supabase.co", "pk", lambda *a: (400, b'{"error_code":"invalid_credentials"}'))
+    with pytest.raises(cloud.CloudError) as e:
+        known.sign_in("a@b.gr", "x")
+    assert str(e.value) == "Λάθος email ή κωδικός." and "Supabase 400" in e.value.detail
+
+
+def test_oauth_error_params():
+    assert cloud.oauth_error({}) is None and cloud.oauth_error({"code": "x"}) is None
+    msg = cloud.oauth_error({"error": "access_denied", "error_description": "User cancelled"})
+    assert msg == "Η σύνδεση με Google απέτυχε: User cancelled (access_denied)."

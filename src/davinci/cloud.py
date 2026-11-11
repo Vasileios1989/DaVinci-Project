@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import secrets as _secrets
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -88,9 +89,9 @@ PAUSED_HINT = " Αν το project του Supabase είναι σε παύση, π
 
 
 class CloudError(Exception):
-    def __init__(self, message: str, code: str | None = None, status: int | None = None):
+    def __init__(self, message: str, code: str | None = None, status: int | None = None, detail: str = ""):
         super().__init__(message)
-        self.code, self.status = code, status
+        self.code, self.status, self.detail = code, status, detail
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,9 @@ def urllib_transport(method: str, url: str, headers: dict, body: bytes | None) -
     except urllib.error.HTTPError as e:
         return e.code, e.read()
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise CloudError(OFFLINE + PAUSED_HINT) from e
+        detail = f"{type(e).__name__}: {getattr(e, 'reason', e)}"[:200]
+        print(f"[DaVinci/Supabase] {method} {url.split('?')[0]} → {detail}", file=sys.stderr)
+        raise CloudError(f"{OFFLINE}{PAUSED_HINT} ({detail})", detail=detail) from e
 
 
 def _error(status: int, raw: bytes) -> CloudError:
@@ -126,15 +129,35 @@ def _error(status: int, raw: bytes) -> CloudError:
         code = "email_not_confirmed"
     if code == "invalid_grant":
         code = "invalid_credentials"
-    msg = MESSAGES.get(str(code), GENERIC + (PAUSED_HINT if status in (502, 503, 504, 540) else ""))
-    return CloudError(msg, str(code) if code else None, status)
+    # Ο λόγος όπως τον έδωσε το Supabase (χωρίς κλειδιά ή διακριτικά): φαίνεται όταν δεν έχουμε δικό μας μήνυμα
+    text = d.get("msg") or d.get("message") or d.get("error_description") or d.get("hint") or ""
+    if not text and not d:
+        text = (raw or b"").decode("utf-8", "replace").strip()
+    detail = " · ".join(str(x) for x in (f"Supabase {status}", code, text) if x)[:240]
+    print(f"[DaVinci/Supabase] {detail}", file=sys.stderr)  # στα logs του Streamlit (Manage app)
+    known = MESSAGES.get(str(code))
+    msg = known or f"{GENERIC}{PAUSED_HINT if status in (502, 503, 504, 540) else ''} ({detail})"
+    return CloudError(msg, str(code) if code else None, status, detail)
 
 
 # Σύνδεση με Google (PKCE): ο «verifier» μένει στον διακομιστή της εφαρμογής μέχρι να γυρίσει ο χρήστης από τη
 # Google· στη διεύθυνση επιστροφής ταξιδεύει μόνο ένα τυχαίο κλειδί (dv) που τον βρίσκει.
 _PKCE: dict[str, str] = {}
 _PKCE_MAX = 500
-OAUTH_EXPIRED = "Η σύνδεση με Google έληξε. Δοκίμασε ξανά."
+OAUTH_EXPIRED = ("Η σύνδεση με Google έληξε (η εφαρμογή ξεκίνησε ξανά ή ο σύνδεσμος χρησιμοποιήθηκε ήδη). "
+                 "Δοκίμασε ξανά.")
+OAUTH_NO_KEY = ("Η Google σε επέστρεψε στην εφαρμογή χωρίς το κλειδί της σύνδεσης. Στο Supabase → Authentication → "
+                "URL Configuration → Redirect URLs πρόσθεσε τη διεύθυνση της εφαρμογής με /** στο τέλος "
+                "(π.χ. https://….streamlit.app/**) και δοκίμασε ξανά.")
+
+
+def oauth_error(params) -> str | None:
+    """Η Google ή το Supabase γύρισαν με ?error=…: το μήνυμα για την οθόνη (None αν δεν υπάρχει σφάλμα)."""
+    err = params.get("error") or params.get("error_code")
+    if not err:
+        return None
+    desc = params.get("error_description") or ""
+    return f"Η σύνδεση με Google απέτυχε: {desc or err} ({err})."[:300]
 
 
 class Supabase:
@@ -151,11 +174,23 @@ class Supabase:
         data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
         status, raw = self.transport(method, self.url + path, headers, data)
         if status >= 400:
-            raise _error(status, raw)
-        return json.loads(raw) if raw else None
+            e = _error(status, raw)
+            e.detail = f"{method} {path.split('?')[0]}{'?' + path.split('?')[1].split('&')[0] if '?' in path else ''} → {e.detail}"
+            if not MESSAGES.get(str(e.code)):
+                e.args = (f"{GENERIC} ({e.detail})",)
+            raise e
+        try:
+            return json.loads(raw) if raw else None
+        except ValueError as exc:
+            detail = f"{method} {path.split('?')[0]} → {status}, όχι JSON: {raw[:120]!r}"
+            print(f"[DaVinci/Supabase] {detail}", file=sys.stderr)
+            raise CloudError(f"{GENERIC} ({detail})", status=status, detail=detail) from exc
 
     @staticmethod
     def _session(d: dict) -> Session:
+        if not isinstance(d, dict) or not d.get("access_token") or not d.get("refresh_token"):
+            keys = ", ".join(sorted(d)) if isinstance(d, dict) else type(d).__name__
+            raise CloudError(f"{GENERIC} (η απάντηση δεν είχε σύνδεση· πεδία: {keys})", detail=keys)
         u = d.get("user") or {}
         return Session(d["access_token"], d["refresh_token"], u.get("id", ""), u.get("email", ""))
 

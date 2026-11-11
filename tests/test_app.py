@@ -309,6 +309,13 @@ class FakeSt:
     def container(self, *a, **k):
         return Ctx()
 
+    def text_input(self, label, key=None, **k):
+        self.shown.append(("text_input", (label,), {"key": key, **k}))
+        return self.values.get(key, "")
+
+    def stop(self):
+        raise StopApp
+
     def popover(self, label, *a, **k):
         self.shown.append(("popover", (label,), k))
         return Ctx()
@@ -351,6 +358,10 @@ class FakeSt:
                 if isinstance(x, str) and 'class="dv-info"' in x:
                     out += [t for _, t in info_paragraphs(x)]
         return out
+
+
+class StopApp(Exception):
+    """st.stop(): η σελίδα σταματά εδώ."""
 
 
 class Ctx:
@@ -430,11 +441,16 @@ def run_app(monkeypatch, values):
     mod.__dict__.update({n: getattr(fake, n) for n in (
         "date_input", "number_input", "radio", "selectbox", "checkbox", "data_editor", "columns", "tabs",
         "expander", "container", "column_config", "session_state", "popover", "button", "download_button",
-        "file_uploader", "rerun")})
+        "file_uploader", "rerun", "text_input", "stop")})
+    if "secrets" in values:
+        mod.secrets = values["secrets"]
     mod.__getattr__ = lambda name: getattr(fake, name)
     monkeypatch.setitem(sys.modules, "streamlit", mod)
     monkeypatch.setattr(al, "today", lambda: TODAY)
-    runpy.run_path(str(ROOT / "streamlit_app.py"), run_name="__main__")
+    try:
+        runpy.run_path(str(ROOT / "streamlit_app.py"), run_name="__main__")
+    except StopApp:
+        fake.stopped = True
     return fake
 
 
@@ -588,6 +604,55 @@ def test_screen_history_save_list_docx_backup_delete(monkeypatch):
     assert [e["date"] for e in d.session_state["history"]] == ["2026-10-01"]
     bad = types.SimpleNamespace(name="b.json", getvalue=lambda: b"{}")
     assert "Το αρχείο δεν είναι αντίγραφο του DaVinci Fitness." in run_app(monkeypatch, {**vals, "backup_up": bad}).errors
+
+
+def run_cloud(monkeypatch, srv, values):
+    from davinci import cloud
+    monkeypatch.setattr(cloud, "from_secrets",
+                        lambda sec: cloud.Supabase("https://x.supabase.co", "pk", srv) if sec else None)
+    return run_app(monkeypatch, {"secrets": {"supabase": {"url": "https://x.supabase.co", "key": "pk"}}, **values})
+
+
+def test_screen_without_secrets_opens_directly(monkeypatch):
+    f = run_app(monkeypatch, dict(WOMAN))
+    assert not f.__dict__.get("stopped") and f.tab_sets[0][0] == "Μέτρηση"
+    assert not any(n == "button" and a[0] == "Συνέχεια χωρίς λογαριασμό" for n, a, k in f.shown)
+
+
+def test_screen_entry_guest_login_and_cloud_history(monkeypatch):
+    # απόφαση του χρήστη (11/11/2026): οθόνη εισόδου με «χωρίς λογαριασμό» ή email και κωδικό· με λογαριασμό
+    # οι μετρήσεις αποθηκεύονται στη βάση και ξαναφορτώνονται σε νέα συνεδρία
+    from fake_supabase import FakeSupabase
+    srv = FakeSupabase()
+    f = run_cloud(monkeypatch, srv, dict(WOMAN))
+    assert f.__dict__.get("stopped") and not f.tab_sets[1:]  # μόνο η οθόνη εισόδου
+    assert f.tab_sets[0] == ["Σύνδεση", "Νέος λογαριασμός", "Ξέχασα τον κωδικό"]
+    assert any(n == "button" and a[0] == "Συνέχεια χωρίς λογαριασμό" for n, a, k in f.shown)
+    g = run_cloud(monkeypatch, srv, {**WOMAN, "mode": "guest"})
+    assert g.tab_sets[0] == ["Μέτρηση", "Αποτελέσματα", "Πλάνο", "Ιστορικό"] and not srv.calls
+    # νέος λογαριασμός
+    h = run_cloud(monkeypatch, srv, {**WOMAN, "su_email": "a@b.gr", "su_pw": "12345678", "su_pw2": "12345678",
+                                     "su_go": True})
+    assert h.session_state["session"].email == "a@b.gr" and h.session_state["mode"] == "account"
+    # σύνδεση και αποθήκευση: γράφεται στη βάση
+    vals = {**WOMAN, "aha": 500, "mdate": date(2026, 9, 1)}
+    s = srv.users["a@b.gr"]
+    i = run_cloud(monkeypatch, srv, {**vals, "li_email": "a@b.gr", "li_pw": "12345678", "li_go": True})
+    sess = i.session_state["session"]
+    j = run_cloud(monkeypatch, srv, {**vals, "mode": "account", "session": sess, "save_res": True})
+    assert [r["measured_on"] for r in srv.rows] == ["2026-09-01"] and srv.rows[0]["user_id"] == s["id"]
+    assert "Συνδεδεμένος: a@b.gr" in j.texts()
+    # νέα συνεδρία (π.χ. άλλη συσκευή): οι μετρήσεις έρχονται από τη βάση
+    k = run_cloud(monkeypatch, srv, {**WOMAN, "mode": "account", "session": j.session_state["session"]})
+    assert [e["date"] for e in k.session_state["history"]] == ["2026-09-01"]
+    assert any(t.startswith("**1. 01/09/2026 · 72,0 kg") for t in k.texts())
+    # διαγραφή: και από τη βάση
+    run_cloud(monkeypatch, srv, {**WOMAN, "mode": "account", "session": k.session_state["session"],
+                                 "del_2026-09-01": True})
+    assert srv.rows == []
+    # λάθος κωδικός: μήνυμα στα ελληνικά
+    bad = run_cloud(monkeypatch, srv, {**WOMAN, "li_email": "a@b.gr", "li_pw": "x", "li_go": True})
+    assert "Λάθος email ή κωδικός." in bad.errors and "session" not in bad.session_state
 
 
 def test_files_for_deployment_exist():

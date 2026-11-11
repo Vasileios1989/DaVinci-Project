@@ -56,10 +56,15 @@ def test_athletic_range_two_points():
     assert r.messages == ()  # ο χρήστης είναι υπέρβαρος: δεν εμφανίζεται το μήνυμα «αδύνατου»
 
 
-def test_health_above_range_targets_upper_bound():
+def test_health_above_range_targets_both_ends_of_the_range():
+    # σύμβαση συστήματος (απόφαση του χρήστη 11/11/2026): εύρος και στην Υγεία, όπως στα άλλα προφίλ·
+    # πρώτο σημείο το ανώτατο υγιές λίπος (ό,τι έδινε πριν ο Κανόνας 1), δεύτερο το κατώτατο
     r = e03.weight_target(W7, FAT7, u(resistance_training=True))
-    assert len(r.points) == 1 and r.points[0].target_fat_percent == 19.9
-    assert r1(r.points[0].weight_kg) == 90.0
+    assert [p.target_fat_percent for p in r.points] == [19.9, 8.0]
+    assert r1(r.points[0].weight_kg) == 90.0  # το πρώτο σημείο δεν άλλαξε
+    assert r.points[1].weight_kg < r.points[0].weight_kg
+    same = e03._point(W7, FAT7, 8.0, u(resistance_training=True))  # ίδιος τύπος με τα άλλα προφίλ
+    assert r.points[1] == same
 
 
 def test_health_within_range_achieved():

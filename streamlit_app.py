@@ -82,7 +82,7 @@ details.dv-info > .dv-info-body {position: fixed; z-index: 1000001; top: 10vh; l
 .dv-info-body p {margin: 0 0 .3rem 0; font-size: .95rem; line-height: 1.4;}
 .dv-info-body ol {margin: 0 0 .4rem 0; padding-left: 1.3rem;} .dv-info-body li {margin: 0 0 .25rem 0; font-size: .95rem;}
 .dv-info-body p.dv-info-small {font-size: .8rem; opacity: .75; margin-top: .5rem;}
-.dv-label {font-size: .9rem; margin: .35rem 0 -.6rem 0;}
+.dv-label {font-size: .9rem; margin: .35rem 0 .2rem 0;}
 .dv-label-strong {font-size: 1.02rem; font-weight: 700; margin-top: 1rem;}
 .dv-info-title {font-size: 1.05rem; font-weight: 700; color: #E6E8EF; margin: 0 2.2rem .4rem 0;}
 .dv-info-title + .dv-info-title, .dv-info-body p + .dv-info-title {margin-top: .8rem;}

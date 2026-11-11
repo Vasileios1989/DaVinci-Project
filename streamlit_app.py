@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 import streamlit as st  # noqa: E402
 
 from davinci import app_logic as al  # noqa: E402
+from davinci import cloud  # noqa: E402
 from davinci import element_01 as e01  # noqa: E402
 from davinci import element_44 as e44  # noqa: E402
 from davinci import history as hist  # noqa: E402
@@ -79,12 +80,104 @@ details.dv-info[open] > summary {border-bottom: 1px solid rgba(255,255,255,.10);
 /* αναλύσεις της άλιπης μάζας (μέσα στο κουτί που ανοίγει): μικρότερα γράμματα */
 .dv-small .dv-row {font-size: .9rem; margin-bottom: .5rem;}
 .dv-small .dv-sub {font-size: .84rem;} .dv-small .dv-target {font-size: .8rem;}
+.dv-logo {font-size: 2.4rem; font-weight: 800; letter-spacing: -.02em; margin: 1.2rem 0 .2rem 0;}
+.dv-logo span {color: #FF7043;}
 </style>
 """
 st.markdown(STYLE, unsafe_allow_html=True)
+
+
+# ------------------------------------------------------------------ είσοδος: χωρίς λογαριασμό ή με email και κωδικό
+# Μόνο όταν έχουν οριστεί τα Secrets του Supabase· αλλιώς η εφαρμογή ανοίγει όπως πριν (χωρίς λογαριασμό).
+CLOUD = cloud.from_secrets(getattr(st, "secrets", None))
+
+
+def session() -> cloud.Session | None:
+    return st.session_state.get("session")
+
+
+def cloud_call(fn):
+    """Κλήση στο Supabase· σφάλμα → μήνυμα στην οθόνη και None."""
+    try:
+        return fn()
+    except cloud.CloudError as e:
+        st.error(str(e))
+        return None
+
+
+def sign_in_done(s: cloud.Session) -> None:
+    st.session_state.update(session=s, mode="account", history=[], _cloud_loaded=False)
+    st.rerun()
+
+
+def entry_screen() -> None:
+    st.markdown('<div class="dv-logo">DaVinci <span>Fitness</span></div>', unsafe_allow_html=True)
+    st.caption("Σύσταση σώματος, αναλογίες και πλάνο, με βάση την επιστημονική βιβλιογραφία.")
+    if st.button("Συνέχεια χωρίς λογαριασμό", key="guest"):
+        st.session_state["mode"] = "guest"
+        st.rerun()
+    st.caption("Χωρίς λογαριασμό οι μετρήσεις κρατιούνται μόνο με αρχείο αντιγράφου.")
+    st.divider()
+    login, signup, reset = st.tabs(["Σύνδεση", "Νέος λογαριασμός", "Ξέχασα τον κωδικό"])
+    with login:
+        email = st.text_input("Email", key="li_email")
+        pw = st.text_input("Κωδικός", type="password", key="li_pw")
+        if st.button("Σύνδεση", key="li_go", type="primary"):
+            s = cloud_call(lambda: CLOUD.sign_in(email or "", pw or ""))
+            if s:
+                sign_in_done(s)
+    with signup:
+        email = st.text_input("Email", key="su_email")
+        pw = st.text_input("Κωδικός (τουλάχιστον 8 χαρακτήρες)", type="password", key="su_pw")
+        pw2 = st.text_input("Ξανά ο κωδικός", type="password", key="su_pw2")
+        if st.button("Δημιουργία λογαριασμού", key="su_go", type="primary"):
+            if (pw or "") != (pw2 or ""):
+                st.error("Οι δύο κωδικοί δεν είναι ίδιοι.")
+            elif len(pw or "") < 8:
+                st.error(cloud.MESSAGES["weak_password"])
+            else:
+                try:
+                    s = CLOUD.sign_up(email or "", pw)
+                except cloud.CloudError as e:
+                    st.error(str(e))
+                else:
+                    if s is not None:
+                        sign_in_done(s)
+                    st.success("Σου στείλαμε email επιβεβαίωσης. Άνοιξε τον σύνδεσμο και μετά συνδέσου.")
+    with reset:
+        email = st.text_input("Email", key="rs_email")
+        if st.button("Στείλε μου κωδικό", key="rs_send"):
+            if cloud_call(lambda: CLOUD.recover(email or "") or True):
+                st.success("Αν υπάρχει λογαριασμός, στάλθηκε email με κωδικό μίας χρήσης.")
+        code = st.text_input("Κωδικός από το email", key="rs_code")
+        new = st.text_input("Νέος κωδικός (τουλάχιστον 8 χαρακτήρες)", type="password", key="rs_new")
+        if st.button("Αλλαγή κωδικού", key="rs_go", type="primary"):
+            if len(new or "") < 8:
+                st.error(cloud.MESSAGES["weak_password"])
+            else:
+                s = cloud_call(lambda: CLOUD.verify_recovery(email or "", code or ""))
+                if s and cloud_call(lambda: CLOUD.set_password(s, new) or True):
+                    sign_in_done(s)
+    st.stop()
+
+
+if CLOUD is not None and not st.session_state.get("mode"):
+    entry_screen()
+
 st.title("DaVinci Fitness")
+if CLOUD is not None:
+    if session() is not None:
+        st.caption(f"Συνδεδεμένος: {session().email}")
+        if st.button("Αποσύνδεση", key="logout"):
+            CLOUD.sign_out(session())
+            for k in ("session", "mode", "history", "_cloud_loaded"):
+                st.session_state.pop(k, None)
+            st.rerun()
+    elif st.button("Σύνδεση ή νέος λογαριασμός", key="to_login"):
+        st.session_state.pop("mode", None)
+        st.rerun()
 st.caption("Επίπεδο Normal · απώλεια λίπους και συντήρηση. Η αύξηση μυών δεν περιλαμβάνεται ακόμη. "
-           "Αποθηκευμένες μετρήσεις: στο «Ιστορικό». Κράτα αντίγραφο (αρχείο), γιατί κλείνοντας τη σελίδα χάνονται.")
+           "Αποθηκευμένες μετρήσεις: στο «Ιστορικό».")
 
 TODAY = al.today()
 
@@ -535,13 +628,46 @@ def tab_results(inp: al.PlanInput, m: al.Measures) -> tuple:
 
 # ------------------------------------------------------------------ ιστορικό (απόφαση του χρήστη 11/11/2026)
 def history() -> list[dict]:
+    """Οι μετρήσεις. Με λογαριασμό διαβάζονται από τη βάση μία φορά ανά συνεδρία."""
+    s = session()
+    if CLOUD is not None and s is not None and not st.session_state.get("_cloud_loaded"):
+        got = cloud_call(lambda: CLOUD.list(s))
+        if got is not None:
+            rows, s = got
+            st.session_state.update(history=hist.ordered(rows), session=s, _cloud_loaded=True)
     return st.session_state.setdefault("history", [])
+
+
+def store(entry: dict) -> bool:
+    """Με λογαριασμό: αποθήκευση και στη βάση. False αν η βάση δεν δέχτηκε την εγγραφή."""
+    s = session()
+    if CLOUD is None or s is None:
+        return True
+    s = cloud_call(lambda: CLOUD.save(s, entry))
+    if s is None:
+        return False
+    st.session_state["session"] = s
+    return True
+
+
+def unstore(day: str) -> bool:
+    s = session()
+    if CLOUD is None or s is None:
+        return True
+    s = cloud_call(lambda: CLOUD.delete(s, day))
+    if s is None:
+        return False
+    st.session_state["session"] = s
+    return True
 
 
 def save_box(inp: al.PlanInput, m: al.Measures, groups, key: str) -> None:
     """Κουμπί αποθήκευσης της τρέχουσας μέτρησης (στο τέλος των «Αποτελεσμάτων» και στην αρχή του «Ιστορικού»)."""
     if st.button(f"Αποθήκευση μέτρησης {hist.day_text(inp.today.isoformat())}", key=key, type="primary"):
-        new, replaced = hist.add(history(), hist.snapshot(inp, m, groups))
+        entry = hist.snapshot(inp, m, groups)
+        if not store(entry):
+            return
+        new, replaced = hist.add(history(), entry)
         st.session_state["history"] = new
         st.success("Η μέτρηση αντικατέστησε την προηγούμενη της ίδιας ημερομηνίας." if replaced
                    else "Η μέτρηση αποθηκεύτηκε στο «Ιστορικό».")
@@ -581,24 +707,29 @@ def tab_history(inp: al.PlanInput | None, m: al.Measures, groups) -> None:
                 st.download_button("Εξαγωγή σε docx", hist.to_docx(entry, i), file_name=hist.docx_name(entry),
                                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                                    key=f"docx_{entry['date']}")
-                if st.button("Διαγραφή", key=f"del_{entry['date']}"):
+                if st.button("Διαγραφή", key=f"del_{entry['date']}") and unstore(entry["date"]):
                     st.session_state["history"] = hist.remove(history(), entry["date"])
                     st.rerun()
             with st.expander("Αποτελέσματα"):
                 show_entry(entry)
     st.divider()
     st.markdown("**Αντίγραφο**")
-    st.caption("Μέχρι να συνδεθεί λογαριασμός, οι μετρήσεις κρατιούνται μόνο όσο είναι ανοιχτή η σελίδα. "
-               "Κατέβασε αντίγραφο μετά από κάθε αποθήκευση και φόρτωσέ το την επόμενη φορά.")
+    if session() is not None:
+        st.caption("Οι μετρήσεις σου αποθηκεύονται στον λογαριασμό σου. Το αντίγραφο είναι προαιρετικό.")
+    else:
+        st.caption("Χωρίς λογαριασμό οι μετρήσεις κρατιούνται μόνο όσο είναι ανοιχτή η σελίδα. "
+                   "Κατέβασε αντίγραφο μετά από κάθε αποθήκευση και φόρτωσέ το την επόμενη φορά.")
     if entries:
         st.download_button("Λήψη αντιγράφου", hist.to_json(entries), file_name="DaVinci_Istoriko.json",
                            mime="application/json", key="backup_down")
     up = st.file_uploader("Φόρτωση αντιγράφου (.json)", type=["json"], key="backup_up")
     if up is not None and st.session_state.get("_loaded") != up.name:
         try:
-            st.session_state["history"] = hist.merge(history(), hist.from_json(up.getvalue()))
-            st.session_state["_loaded"] = up.name
-            st.rerun()
+            loaded = hist.from_json(up.getvalue())
+            if all(store(e) for e in loaded):  # με λογαριασμό: και στη βάση
+                st.session_state["history"] = hist.merge(history(), loaded)
+                st.session_state["_loaded"] = up.name
+                st.rerun()
         except hist.BadBackup as e:
             st.error(str(e))
 

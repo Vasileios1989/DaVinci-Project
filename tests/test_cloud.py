@@ -86,3 +86,29 @@ def test_setup_sql_protects_rows():
     sql = cloud.SETUP_SQL
     assert "enable row level security" in sql and sql.count("(select auth.uid()) = user_id") == 5
     assert "revoke all on public.measurements from anon" in sql and "unique (user_id, measured_on)" in sql
+
+
+def test_remember_me_uses_refresh_token_not_password():
+    c, srv = client()
+    s = c.sign_up("a@b.gr", "12345678")
+    again = c.remembered(s.refresh_token)
+    assert again.user_id == s.user_id and again.email == "a@b.gr" and again.refresh_token != s.refresh_token
+    with pytest.raises(cloud.CloudError, match="Η σύνδεση έληξε"):
+        c.remembered(s.refresh_token)  # κάθε διακριτικό ανανέωσης ισχύει μία φορά
+
+
+def test_google_sign_in_with_pkce():
+    import urllib.parse
+    srv = FakeSupabase()
+    assert cloud.Supabase("https://x.supabase.co", "pk", srv).google_url() is None  # χωρίς διεύθυνση εφαρμογής
+    c = cloud.Supabase("https://x.supabase.co", "pk", srv, app_url="https://app.streamlit.app/")
+    url = c.google_url()
+    assert url.startswith("https://x.supabase.co/auth/v1/authorize?provider=google&")
+    back = urllib.parse.parse_qs(urllib.parse.urlsplit(srv.google(url, "g@gmail.com")).query)
+    assert set(back) == {"dv", "code"}  # ο verifier δεν ταξιδεύει στη διεύθυνση
+    s = c.google_finish(back["code"][0], back["dv"][0])
+    assert s.email == "g@gmail.com"
+    with pytest.raises(cloud.CloudError, match="έληξε"):
+        c.google_finish(back["code"][0], back["dv"][0])  # το κλειδί ισχύει μία φορά
+    conf = {"supabase": {"url": "https://x.supabase.co", "key": "k", "app_url": "https://app.streamlit.app"}}
+    assert cloud.from_secrets(conf).app_url == "https://app.streamlit.app"

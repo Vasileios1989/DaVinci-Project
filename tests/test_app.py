@@ -244,6 +244,8 @@ class FakeSt:
         self.tab_sets, self.session_state = [], dict(values)  # οι τιμές των πεδίων ζουν στο session_state ανά key
         self.open_expanders, self.placed = [], []  # placed: (είδος, κείμενο, καρτέλα, μέσα σε ⓘ;, διαδρομή)
         self.path = []  # καρτέλες από έξω προς τα μέσα
+        self.query_params = dict(values.get("_query", {}))  # διεύθυνση (?code=…&dv=…)
+        self.context = types.SimpleNamespace(cookies=dict(values.get("_cookies", {})))
         self.column_config = types.SimpleNamespace(**{n: (lambda *a, **k: {"col": n}) for n in
                                                       ("DateColumn", "NumberColumn", "TextColumn", "CheckboxColumn")})
 
@@ -258,6 +260,21 @@ class FakeSt:
             if name == "error":
                 self.errors.append(a[0])
         return record
+
+    def markdown(self, text, *a, **k):
+        """Όπως κάθε κλήση· επιπλέον, το «ⓘ info» με οδηγίες μέτρησης (παράθυρο δίπλα στο πεδίο) καταγράφεται όπως
+        ένα ⓘ: τίτλος στα expanders, βήματα «1. …», σημειώσεις ως info, πρωτόκολλο ως caption, «μέσα σε ⓘ»."""
+        self.__getattr__("markdown")(text, *a, **k)
+        if isinstance(text, str) and 'dv-guide' in text:
+            for box in text.split('<details class="dv-info dv-guide">')[1:]:
+                title = html.unescape(re.search(r'<div class="dv-info-title">(.*?)</div>', box).group(1))
+                self.expanders.append(f"ⓘ {title}")
+                self.open_expanders.append(title)
+                for i, step in enumerate(re.findall(r"<li>(.*?)</li>", box), start=1):
+                    self.__getattr__("markdown")(f"{i}. {html.unescape(step)}")
+                for cls, para in re.findall(r'<p(?: class="(.*?)")?>(.*?)</p>', box):
+                    self.__getattr__("caption" if cls else "info")(html.unescape(para))
+                self.open_expanders.pop()
 
     # widgets
     def date_input(self, label, value=None, key=None, **k):
@@ -409,7 +426,8 @@ def md_lines(fake):
         if 'class="dv-info"' in a[0]:
             out += [f"**{x}:** {y}" if x else y for x, y in info_paragraphs(a[0])]
         if a[0].startswith("<div") or 'class="dv-info"' in a[0]:
-            out += [f"**{html.unescape(x)}:** {html.unescape(y)}" for x, y in _PAIR.findall(a[0])]
+            bare = re.sub(r'<details class="dv-info.*?</details>', "", a[0], flags=re.S)  # χωρίς τα ⓘ
+            out += [f"**{html.unescape(x)}:** {html.unescape(y)}" for x, y in _PAIR.findall(bare)]
             continue
         out += a[0].split(BR)
     return out
@@ -435,13 +453,20 @@ def titled(titles, wanted):
     return all(any(t == w or t.startswith(w + " ") for t in titles) for w in wanted)
 
 
+# Τιμές ζυγαριάς που μπαίνουν όταν το τεστ δεν τις ορίζει: από 11/11/2026 είναι υποχρεωτικές (απόφαση του χρήστη).
+# None = «άφησέ το κενό».
+SCALE_KEYS = {"m_muscle": 30.0, "m_water": 50.0, "m_bone": 3.5}
+
+
 def run_app(monkeypatch, values):
+    values = {**SCALE_KEYS, **values}
+    values = {k: v for k, v in values.items() if not (k in SCALE_KEYS and v is None)}
     fake = FakeSt(values)
     mod = types.ModuleType("streamlit")
     mod.__dict__.update({n: getattr(fake, n) for n in (
         "date_input", "number_input", "radio", "selectbox", "checkbox", "data_editor", "columns", "tabs",
         "expander", "container", "column_config", "session_state", "popover", "button", "download_button",
-        "file_uploader", "rerun", "text_input", "stop")})
+        "file_uploader", "rerun", "text_input", "stop", "query_params", "context")})
     if "secrets" in values:
         mod.secrets = values["secrets"]
     mod.__getattr__ = lambda name: getattr(fake, name)
@@ -493,7 +518,7 @@ def test_screen_tabs_order_and_no_card_or_guides_tab(monkeypatch):
                          "Συσκευή / μέθοδος": ["μεζούρα"] * 4, "ISAK": [False] * 4})
     f = run_app(monkeypatch, {**WOMAN, "card_rows": rows, "card_waist": True, "aha": 500})
     assert f.tab_sets[0] == ["Μέτρηση", "Αποτελέσματα", "Πλάνο", "Ιστορικό"]
-    assert f.tab_sets[1] == ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"] and len(f.tab_sets) == 3
+    assert f.tab_sets[1] == ["Προσωπικά", "Κορμός", "Άκρα"] and len(f.tab_sets) == 3
     assert f.tab_sets[2] == list(rv.TAB_TITLES)  # κουμπιά των «Αποτελεσμάτων»
     md = md_lines(f)
     assert not f.errors and not any(x.startswith("**Τρέχον:**") for x in md)
@@ -563,16 +588,6 @@ def test_screen_results_tabs_brief_colored_and_comments_inside_info(monkeypatch)
     small = [t for kind, t, inside in res if kind == "markdown" and t.startswith('<div class="dv-small">')]
     assert any("<b>Σκελετικοί μύες</b>" in t for t in small) and any("<b>Νερό</b>" in t for t in small)
     assert not any("<b>Βάρος</b>" in t for t in small)
-
-
-def test_screen_results_missing_scale_values_say_what_to_fill(monkeypatch):
-    man = {"birth": date(1989, 1, 1), "sex": "Άνδρας", "height": 177.0, "weight": 138.9, "fat": 43.2,
-           "ancestry": "1", "pal": "1.4", "aha": 500}
-    f = run_app(monkeypatch, man)
-    infos = [t for kind, t, tab, inside, path in f.placed
-             if kind == "info" and path == ("Αποτελέσματα", "Σύσταση σώματος") and inside]
-    assert "Για τις γραμμές που λείπουν συμπλήρωσε στη «Μέτρηση» → «Ζυγαριά»: Μύες %." in infos
-    assert "**Σκελετικοί μύες:** δεν υπολογίστηκε" in md_lines(f)
 
 
 def test_screen_history_save_list_docx_backup_delete(monkeypatch):
@@ -653,6 +668,101 @@ def test_screen_entry_guest_login_and_cloud_history(monkeypatch):
     # λάθος κωδικός: μήνυμα στα ελληνικά
     bad = run_cloud(monkeypatch, srv, {**WOMAN, "li_email": "a@b.gr", "li_pw": "x", "li_go": True})
     assert "Λάθος email ή κωδικός." in bad.errors and "session" not in bad.session_state
+
+
+def test_screen_activity_modes_kcal(monkeypatch):
+    # απόφαση του χρήστη (11/11/2026): Δραστηριότητα · Σταθερό · Εβδομαδιαίο · Διαφοροποιημένο, με ⓘ δίπλα
+    base = {**WOMAN, "aha": 500}
+    base.pop("pal")
+    f = run_app(monkeypatch, base)
+    assert "Συμπλήρωσε: επίπεδο δραστηριότητας." in f.texts()
+    assert "ⓘ Δραστηριότητα" in f.expanders and "ⓘ Προπόνηση με βάρη ή μικτή" in f.expanders
+    bmr = e40.bmr(al._user(al.PlanInput(birth_date=WOMAN["birth"], sex="Γυναίκα", height_cm=165.0, weight_kg=72.0,
+                                        fat_percent=38.0, today=TODAY)), 72.0).kcal
+    fixed = run_app(monkeypatch, {**base, "act_mode": "Σταθερό", "kcal_fixed": round(bmr * 1.5)})
+    assert not fixed.errors and "ⓘ Σταθερό" in fixed.expanders
+    assert e40.load_data()["messages"]["pal_from_kcal"] in fixed.texts()
+    week = {f"kcal_w{i}": v for i, v in enumerate((2400, 1900, 2400, 1900, 2400, 1900, 1800))}
+    w = run_app(monkeypatch, {**base, "act_mode": "Εβδομαδιαίο", **week})
+    labels = [label for g, label in w.inputs]
+    assert "Δευτέρα (kcal)" in labels and "Κυριακή (kcal)" in labels and not w.errors
+    assert any(n == "button" and a[0] == "Ίδια τιμή σε όλες" for n, a, k in w.shown)
+    assert e40.load_data()["messages"]["pal_from_kcal"] in w.texts()
+    part = run_app(monkeypatch, {**base, "act_mode": "Εβδομαδιαίο", "kcal_w0": 2000})
+    assert "Συμπλήρωσε: θερμίδες κάθε ημέρας." in part.texts()
+    no_n = run_app(monkeypatch, {**base, "act_mode": "Διαφοροποιημένο"})
+    assert "Συμπλήρωσε: ημέρες προγράμματος." in no_n.texts()
+    cyc = run_app(monkeypatch, {**base, "act_mode": "Διαφοροποιημένο", "kcal_n": 3, "kcal_d1": 2000, "kcal_d2": 2200,
+                                "kcal_d3": 1800})
+    assert [x for x in [label for g, label in cyc.inputs] if x.startswith("Ημέρα ")] == [
+        "Ημέρα 1 (kcal)", "Ημέρα 2 (kcal)", "Ημέρα 3 (kcal)"] and not cyc.errors
+    low = run_app(monkeypatch, {**base, "act_mode": "Σταθερό", "kcal_fixed": 600})
+    assert any(t.startswith("Οι θερμίδες που έγραψες (600 kcal") for t in low.texts())
+
+
+def test_kcal_to_pal_rules():
+    k = dict(birth_date=date(1989, 6, 1), today=date(2026, 11, 11), sex="Άνδρας", height_cm=177.0, weight_kg=140.0)
+    user = al._user(al.PlanInput(fat_percent=42.5, **{x: k[x] for x in ("birth_date", "today", "sex", "height_cm",
+                                                                         "weight_kg")}))
+    bmr = e40.bmr(user, 140.0).kcal
+    assert al.kcal_average([2000]) == 2000 and al.kcal_average([2000, 2200, 1800]) == 2000
+    with pytest.raises(ValueError):
+        al.kcal_average([2000, None])
+    pal = al.pal_from_kcal(bmr * 1.5, **k)
+    assert abs(pal - 1.5) < 1e-9
+    assert e40.pal_bounds() == (1.3, 2.0) and e40.pal_bounds(athlete=True) == (1.3, 2.4)
+    with pytest.raises(al.KcalOutOfRange):
+        al.pal_from_kcal(bmr * 1.2, **k)
+    with pytest.raises(al.KcalOutOfRange):
+        al.pal_from_kcal(bmr * 2.1, **k)
+    # ίδιο αποτέλεσμα με το PAL του πίνακα όταν οι θερμίδες αντιστοιχούν ακριβώς σε αυτό
+    a = e40.assess(user, 140.0, 1.6)
+    b = e40.assess(user, 140.0, al.pal_from_kcal(bmr * 1.6, **k), pal_exact=True)
+    assert abs(a.tdee - b.tdee) < 1e-6 and e40.load_data()["messages"]["pal_from_kcal"] in b.messages
+    with pytest.raises(e01.InvalidInput):
+        e40.assess(user, 140.0, 1.0)  # χωρίς pal_exact ισχύει μόνο ο πίνακας
+
+
+def test_screen_info_next_to_the_element(monkeypatch):
+    # απόφαση του χρήστη (11/11/2026): «ⓘ info» στην ίδια γραμμή με το στοιχείο, παράθυρο που κυλά
+    f = run_app(monkeypatch, {**WOMAN, "m_waist": 88.0})
+    labels = [a[0] for n, a, k in f.shown if n == "markdown" and a and str(a[0]).startswith('<div class="dv-label')]
+    waist = next(x for x in labels if x.startswith('<div class="dv-label">Μέση (cm)<details'))
+    assert '<summary>ⓘ info</summary>' in waist and waist.count("<details") == 1
+    rows = [a[0] for n, a, k in f.shown if n == "markdown" and a and str(a[0]).startswith('<div class="dv-row')]
+    weight = next(x for x in rows if "<b>Βάρος</b>" in x)
+    assert weight.index('<details class="dv-info">') < weight.index('<div class="dv-target">')  # δίπλα στο όνομα
+    style = next(a[0] for n, a, k in f.shown if n == "markdown" and a and str(a[0]).lstrip().startswith("<style>"))
+    assert "position: fixed" in style and "overflow-y: auto" in style
+    assert not any(n == "caption" and a and str(a[0]).startswith("Όργανα:") for n, a, k in f.shown)
+
+
+def test_screen_remember_me_and_google(monkeypatch):
+    from fake_supabase import FakeSupabase
+    from davinci import cloud
+    srv = FakeSupabase()
+    c = cloud.Supabase("https://x.supabase.co", "pk", srv, app_url="https://app.streamlit.app")
+    s = c.sign_up("a@b.gr", "12345678")
+    monkeypatch.setattr(cloud, "from_secrets", lambda sec: c if sec else None)
+    sec = {"secrets": {"supabase": {"url": "https://x.supabase.co", "key": "pk"}}}
+    login = run_app(monkeypatch, {**sec, **WOMAN, "li_email": "a@b.gr", "li_pw": "12345678", "li_go": True})
+    assert login.session_state["_cookie"] == login.session_state["session"].refresh_token  # «Να με θυμάσαι»: ναι
+    assert any(n == "link_button" and a[0] == "Σύνδεση με Google" for n, a, k in login.shown)
+    no = run_app(monkeypatch, {**sec, **WOMAN, "li_email": "a@b.gr", "li_pw": "12345678", "li_go": True,
+                               "li_remember": False})
+    assert "_cookie" not in no.session_state
+    # νέα επίσκεψη: η συσκευή έχει το cookie → μπαίνει χωρίς κωδικό
+    back = run_app(monkeypatch, {**sec, **WOMAN, "_cookies": {"dv_rt": login.session_state["_cookie"]}})
+    assert back.session_state["session"].email == "a@b.gr" and not back.__dict__.get("stopped")
+    stale = run_app(monkeypatch, {**sec, **WOMAN, "_cookies": {"dv_rt": "παλιό"}})
+    assert stale.__dict__.get("stopped") and stale.session_state["_cookie"] is None and not stale.errors
+    # Google: η διεύθυνση επιστροφής φέρνει ?code=…&dv=…
+    url = login.session_state.get("_google_url") or c.google_url()
+    q = dict(x.split("=", 1) for x in srv.google(url, "g@gmail.com").split("?", 1)[1].split("&"))
+    g = run_app(monkeypatch, {**sec, **WOMAN, "_query": q})
+    assert g.session_state["session"].email == "g@gmail.com" and g.query_params == {}
+    out = run_app(monkeypatch, {**WOMAN, **sec, "mode": "account", "session": s, "remember": True, "logout": True})
+    assert out.session_state["_cookie"] is None and "session" not in out.session_state
 
 
 def test_files_for_deployment_exist():
@@ -794,7 +904,8 @@ def test_measurement_sections_errors():
 
 def test_screen_measures_tab(monkeypatch):
     vals = {"birth": date(1989, 1, 1), "sex": "Άνδρας", "height": 177.0, "weight": 138.9, "fat": 60.0 / 138.9 * 100,
-            "ancestry": "1", "pal": "1.4", "m_waist": 146.0, "m_thigh": 70.0, "m_muscle": 30.0, "m_visceral": 8.0}
+            "ancestry": "1", "pal": "1.4", "m_waist": 146.0, "m_thigh": 70.0, "m_muscle": 30.0, "m_visceral": 8.0,
+            "level": "Professional"}
     f = run_app(monkeypatch, vals)
     md = md_lines(f)
     assert not f.errors
@@ -970,7 +1081,8 @@ def test_e03_analysis_without_water_and_typical_bone_message_once():
 def test_screen_batch2(monkeypatch):
     vals = {"birth": date(1989, 1, 1), "sex": "Άνδρας", "height": 177.0, "weight": 139.1, "fat": 42.9,
             "ancestry": "1", "pal": "1.4", "m_muscle": 30.0, "m_water": 39.2, "m_bone": 1.9,
-            "m_prev3": 100.0, "m_prev2": 100.0, "m_prev1": 100.0, "m_today": 98.0, "m_urine": 6, "m_thirst": 5.0}
+            "m_prev3": 100.0, "m_prev2": 100.0, "m_prev1": 100.0, "m_today": 98.0, "m_urine": 6, "m_thirst": 5.0,
+            "level": "Professional"}
     f = run_app(monkeypatch, vals)
     md = md_lines(f)
     assert not f.errors
@@ -1069,22 +1181,30 @@ def test_screen_batch3(monkeypatch):
 
 
 def test_screen_inputs_grouped_in_categories(monkeypatch):
+    # απόφαση του χρήστη (11/11/2026, 6η): η ζυγαριά μέσα στα «Προσωπικά», χωρίς γκρι γραμμές-τίτλους,
+    # η ενυδάτωση μόνο στο Professional
     f = run_app(monkeypatch, {})
-    full = ["1. Προσωπικά στοιχεία", "2. Σύσταση σώματος (ζυγαριά)", "3. Περιφέρειες κορμού (μεζούρα)",
-            "4. Περιφέρειες άκρων (μεζούρα)", "5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"]
-    top = ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"]  # περιοχές, ως καρτέλες μέσα στη «Μέτρηση»
-    assert f.tab_sets[1] == top and all(x in f.texts() for x in full)
-    assert not any(e[:2] in ("1.", "2.", "3.", "4.", "5.") for e in f.expanders)
+    top = ["Προσωπικά", "Κορμός", "Άκρα"]
+    assert f.tab_sets[1] == top
+    assert not any(t[:3] in ("1. ", "2. ", "3. ", "4. ", "5. ") and ("στοιχεία" in t or "μεζούρα" in t or "ζυγαριά" in t)
+                   for n, a, k in f.shown if n == "caption" for t in a if isinstance(t, str))
     where = {label: g for g, label in f.inputs}
-    assert where["Ύψος (cm)"] == top[0]
-    assert {where[x] for x in ("Βάρος (kg)", "Λίπος %", "Μύες %", "Υγρά %", "Οστά %")} == {top[1]}
-    assert {where[x] for x in ("Λαιμός (cm)", "Στήθος (cm)", "Μέση (cm)", "Ισχίο (cm)")} == {top[2]}
-    assert where["Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)"] == top[3] and where["Πρωινό βάρος σήμερα (kg)"] == top[4]
+    assert {where[x] for x in ("Ύψος (cm)", "Βάρος (kg)", "Λίπος %", "Μύες %", "Υγρά %", "Οστά %")} == {top[0]}
+    assert {where[x] for x in ("Λαιμός (cm)", "Στήθος (cm)", "Μέση (cm)", "Ισχίο (cm)")} == {top[1]}
+    assert where["Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)"] == top[2]
+    assert "Πρωινό βάρος σήμερα (kg)" not in where and "Σπλαχνικό λίπος — ζυγαριά" not in where
+    assert "Ακρωτηριασμός (αλλάζει το βάρος)" not in str(f.shown)
+    # οι οδηγίες της ζυγαριάς μία φορά, στην επικεφαλίδα· όχι σε κάθε πεδίο
+    assert f.expanders.count("ⓘ " + measurement.guide("λίπος % (ζυγαριά)").title) == 1
+    p = run_app(monkeypatch, {"level": "Professional"})
+    where = {label: g for g, label in p.inputs}
+    assert where["Πρωινό βάρος σήμερα (kg)"] == "Ενυδάτωση" and where["Σπλαχνικό λίπος — ζυγαριά"] == "Εξετάσεις"
 
 
 def test_screen_missing_fields_listed(monkeypatch):
-    f = run_app(monkeypatch, {"birth": date(1990, 1, 1), "height": 170.0})
-    assert "Συμπλήρωσε: βάρος, λίπος, επίπεδο δραστηριότητας." in f.texts()
+    f = run_app(monkeypatch, {"birth": date(1990, 1, 1), "height": 170.0, "m_muscle": None, "m_water": None,
+                              "m_bone": None})
+    assert "Συμπλήρωσε: βάρος, λίπος, μύες, υγρά, οστά, επίπεδο δραστηριότητας." in f.texts()
 
 
 def test_screen_missing_birth_and_profiles_by_age(monkeypatch):
@@ -1095,7 +1215,6 @@ def test_screen_missing_birth_and_profiles_by_age(monkeypatch):
     assert minor.options["profile"] == ["Υγεία"]
 
 
-
 # ================================================================ Normal / Professional (Στοιχείο 46) και «Προαιρετικό»
 from davinci import element_06 as e06m  # noqa: E402
 from davinci import element_46 as e46  # noqa: E402
@@ -1104,21 +1223,24 @@ PRO = dict(level="Professional")
 
 
 def test_required_fields_have_no_placeholder_optional_do(monkeypatch):
-    f = run_app(monkeypatch, {})
+    f = run_app(monkeypatch, {"level": "Professional"})
     ph = f.placeholders
-    assert ph["Ύψος (cm)"] is None and ph["Βάρος (kg)"] is None and ph["Λίπος %"] is None
-    for label in ("Μύες %", "Υγρά %", "Οστά %", "Μέση (cm)", "Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)", "Πρωινό βάρος σήμερα (kg)",
-                  "Σπλαχνικό λίπος — μόνο αν το δείχνει η ζυγαριά σου (χωρίς μονάδα)"):
+    for label in ("Ύψος (cm)", "Βάρος (kg)", "Λίπος %", "Μύες %", "Υγρά %", "Οστά %"):
+        assert ph[label] is None  # υποχρεωτικά (απόφαση του χρήστη 11/11/2026)
+    for label in ("Μέση (cm)", "Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)", "Πρωινό βάρος σήμερα (kg)",
+                  "Σπλαχνικό λίπος — ζυγαριά"):
         assert ph[label] == "Προαιρετικό"
+    g = run_app(monkeypatch, {**WOMAN, "m_muscle": None, "m_bone": None})
+    assert any(t == "Συμπλήρωσε: μύες, οστά." for t in g.texts())
 
 
 def test_normal_hides_professional_categories(monkeypatch):
     f = run_app(monkeypatch, dict(WOMAN))
-    assert f.tab_sets[1] == ["Προσωπικά", "Ζυγαριά", "Κορμός", "Άκρα", "Ενυδάτωση"]
-    assert any(t.startswith("Όργανα: ") and "Δερματοπτυχόμετρο" not in t for t in f.texts())
+    assert f.tab_sets[1] == ["Προσωπικά", "Κορμός", "Άκρα"]
+    assert any(t.startswith("Όργανα: ") and "Δερματοπτυχόμετρο" not in t for t in f.texts())  # μέσα στο ⓘ
+    assert "ⓘ Επίπεδο Normal" in f.expanders
     p = run_app(monkeypatch, {**WOMAN, "level": "Professional", "x_meno": "Ναι"})
-    assert p.tab_sets[1][5:] == ["Όργανα", "Εξετάσεις"]
-    assert {"6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)", "7. Ιατρικές εξετάσεις (προαιρετικά)"} <= set(p.texts())
+    assert p.tab_sets[1] == ["Προσωπικά", "Κορμός", "Άκρα", "Ενυδάτωση", "Όργανα", "Εξετάσεις"]
     assert e46.load_data()["messages"]["N3"] in p.texts() and e46.medical_entry_message() in p.texts()
     assert p.options["x_meno"] == ["Ναι", "Όχι"] and not p.errors
 
@@ -2013,11 +2135,15 @@ def test_e39_conditions():
 
 
 def test_screen_batch11(monkeypatch):
+    # ο ακρωτηριασμός δεν ρωτιέται πια στην οθόνη (απόφαση του χρήστη 11/11/2026)· ο υπολογισμός του δεν άλλαξε
     f = run_app(monkeypatch, {**WOMAN, "m_amputation": True})
     subs = shown_titles(f)
     assert not f.errors and titled(subs, {"Σκελετός", "Εύρη οστών και δερματοπτυχές",
                              "Ενδομορφία και μεσομορφία", "Εκτομορφία"})
-    assert e39.load_data()["messages"]["condition"].replace("[το οίδημα/ο ακρωτηριασμός]", "ο ακρωτηριασμός") in f.texts()
+    assert e39.load_data()["messages"]["condition"].replace("[το οίδημα/ο ακρωτηριασμός]", "ο ακρωτηριασμός") not in f.texts()
+    assert any("ο ακρωτηριασμός" in m for m in e39.compute(72.0, al._user(al.PlanInput(
+        birth_date=date(1986, 1, 1), sex="Γυναίκα", height_cm=165.0, weight_kg=72.0, fat_percent=38.0,
+        today=TODAY)), amputation=True).messages)
     vals = {**WOMAN, "level": "Professional", "p_caliper": "Harpenden / Holtain", "p_isak": "Ναι",
             "p_tri1": 15.0, "p_tri2": 15.0, "p_sub1": 12.0, "p_sub2": 12.0, "p_sup1": 10.0, "p_sup2": 10.0,
             "p_sup_site": "Ναι", "p_calf1": 12.0, "p_calf2": 12.0, "m_calf": 37.0, "p_elbow": 6.4,

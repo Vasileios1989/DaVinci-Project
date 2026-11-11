@@ -12,7 +12,10 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import secrets as _secrets
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -74,6 +77,10 @@ MESSAGES = {
     "session_expired": "Η σύνδεση έληξε. Συνδέσου ξανά.",
     "otp_expired": "Ο κωδικός έληξε ή είναι λάθος. Ζήτησε νέο.",
     "same_password": "Ο νέος κωδικός είναι ίδιος με τον παλιό.",
+    "provider_disabled": "Η σύνδεση με Google δεν έχει ενεργοποιηθεί στο Supabase.",
+    "flow_state_not_found": "Η σύνδεση με Google έληξε. Δοκίμασε ξανά.",
+    "flow_state_expired": "Η σύνδεση με Google έληξε. Δοκίμασε ξανά.",
+    "bad_code_verifier": "Η σύνδεση με Google δεν ολοκληρώθηκε. Δοκίμασε ξανά.",
 }
 GENERIC = "Η υπηρεσία αποθήκευσης δεν απάντησε σωστά. Δοκίμασε ξανά."
 OFFLINE = "Δεν υπάρχει σύνδεση με την υπηρεσία αποθήκευσης. Έλεγξε το internet ή δοκίμασε σε λίγο."
@@ -123,9 +130,17 @@ def _error(status: int, raw: bytes) -> CloudError:
     return CloudError(msg, str(code) if code else None, status)
 
 
+# Σύνδεση με Google (PKCE): ο «verifier» μένει στον διακομιστή της εφαρμογής μέχρι να γυρίσει ο χρήστης από τη
+# Google· στη διεύθυνση επιστροφής ταξιδεύει μόνο ένα τυχαίο κλειδί (dv) που τον βρίσκει.
+_PKCE: dict[str, str] = {}
+_PKCE_MAX = 500
+OAUTH_EXPIRED = "Η σύνδεση με Google έληξε. Δοκίμασε ξανά."
+
+
 class Supabase:
-    def __init__(self, url: str, key: str, transport: Transport = urllib_transport):
+    def __init__(self, url: str, key: str, transport: Transport = urllib_transport, app_url: str | None = None):
         self.url, self.key, self.transport = url.rstrip("/"), key, transport
+        self.app_url = app_url.rstrip("/") if app_url else None  # η διεύθυνση της εφαρμογής (για το Google)
 
     # --- κλήσεις ---
     def _call(self, method: str, path: str, body=None, token: str | None = None, extra: dict | None = None):
@@ -175,6 +190,31 @@ class Supabase:
     def set_password(self, s: Session, password: str) -> None:
         self._call("PUT", "/auth/v1/user", {"password": password}, s.access_token)
 
+    def remembered(self, refresh_token: str) -> Session:
+        """«Να με θυμάσαι»: νέα σύνδεση από το διακριτικό ανανέωσης που κρατά η συσκευή (όχι ο κωδικός)."""
+        return self.refresh(Session("", refresh_token, "", ""))
+
+    def google_url(self) -> str | None:
+        """Η διεύθυνση του κουμπιού «Σύνδεση με Google»· None αν δεν έχει οριστεί η διεύθυνση της εφαρμογής."""
+        if not self.app_url:
+            return None
+        nonce, verifier = _secrets.token_urlsafe(16), _secrets.token_urlsafe(48)
+        while len(_PKCE) >= _PKCE_MAX:
+            _PKCE.pop(next(iter(_PKCE)))
+        _PKCE[nonce] = verifier
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        q = urllib.parse.urlencode({"provider": "google", "redirect_to": f"{self.app_url}/?dv={nonce}",
+                                    "code_challenge": challenge, "code_challenge_method": "s256"})
+        return f"{self.url}/auth/v1/authorize?{q}"
+
+    def google_finish(self, code: str, nonce: str) -> Session:
+        """Ο χρήστης γύρισε από τη Google με ?code=…&dv=…: ανταλλαγή του κωδικού με σύνδεση."""
+        verifier = _PKCE.pop(nonce, None)
+        if verifier is None:
+            raise CloudError(OAUTH_EXPIRED)
+        return self._session(self._call("POST", "/auth/v1/token?grant_type=pkce",
+                                        {"auth_code": code, "code_verifier": verifier}))
+
     def sign_out(self, s: Session) -> None:
         try:
             self._call("POST", "/auth/v1/logout", {}, s.access_token)
@@ -212,7 +252,8 @@ class Supabase:
 
 
 def from_secrets(secrets) -> Supabase | None:
-    """Από τα Secrets του Streamlit: [supabase] url = "…", key = "…". None αν δεν έχουν οριστεί."""
+    """Από τα Secrets του Streamlit: [supabase] url = "…", key = "…" και, για το Google, app_url = "…".
+    None αν δεν έχουν οριστεί."""
     try:
         conf = secrets["supabase"]
         url, key = str(conf["url"]).strip(), str(conf["key"]).strip()
@@ -220,4 +261,8 @@ def from_secrets(secrets) -> Supabase | None:
         return None
     if not url.startswith("https://") or not key:
         return None
-    return Supabase(url, key)
+    try:
+        app_url = str(conf["app_url"]).strip()
+    except Exception:
+        app_url = ""
+    return Supabase(url, key, app_url=app_url if app_url.startswith("https://") else None)

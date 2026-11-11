@@ -14,6 +14,15 @@ class FakeSupabase:
         self.confirm_email, self.calls, self.n = confirm_email, [], 0
         self.otp = {}  # email → κωδικός ανάκτησης
         self.expire_next = False  # η επόμενη κλήση στον πίνακα απαντά 401 (έληξε το διακριτικό)
+        self.flows = {}  # κωδικός επιστροφής από τη Google → {"challenge", "email"}
+
+    def google(self, authorize_url, email):
+        """Ο χρήστης πάτησε το κουμπί και διάλεξε λογαριασμό Google: επιστρέφει τη διεύθυνση επιστροφής."""
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(authorize_url).query)
+        assert q["provider"] == ["google"] and q["code_challenge_method"] == ["s256"]
+        code = f"code{len(self.flows) + 1}"
+        self.flows[code] = {"challenge": q["code_challenge"][0], "email": email}
+        return q["redirect_to"][0] + "&code=" + code
 
     def _issue(self, uid):
         self.n += 1
@@ -52,6 +61,16 @@ class FakeSupabase:
             if uid is None:
                 return self._err(400, "refresh_token_not_found")
             return 200, json.dumps(self._issue(uid)).encode()
+        if u.path == "/auth/v1/token" and q["grant_type"] == ["pkce"]:
+            import base64
+            import hashlib
+            flow = self.flows.pop(d["auth_code"], None)
+            ch = base64.urlsafe_b64encode(hashlib.sha256(d["code_verifier"].encode()).digest()).rstrip(b"=").decode()
+            if flow is None or flow["challenge"] != ch:
+                return self._err(400, "bad_code_verifier")
+            if flow["email"] not in self.users:
+                self.users[flow["email"]] = {"id": f"u{len(self.users) + 1}", "password": None, "confirmed": True}
+            return 200, json.dumps(self._issue(self.users[flow["email"]]["id"])).encode()
         if u.path == "/auth/v1/recover":
             if d["email"] in self.users:
                 self.otp[d["email"]] = "123456"

@@ -42,6 +42,7 @@ class PlanInput:
     breastfeeding: bool = False
     pal: float = 1.4
     level: str = "Normal"  # Στοιχείο 46
+    kcal_day: float | None = None  # δηλωμένες θερμίδες ανά ημέρα (μέσος όρος)· τότε pal = kcal_day ÷ BMR
     aha_deficit: int | str | None = None  # 500 · 750 · «30%» (ΔΜΣ ≥ 25, απώλεια)
     rate_percent: float | None = None  # % του βάρους την εβδομάδα (ΔΜΣ < 25, απώλεια)
 
@@ -92,6 +93,34 @@ def allowed_profiles(birth_date: date, today: date) -> tuple[str, ...]:
     return e01.allowed_profiles(e01.age_in_completed_years(birth_date, today))
 
 
+class KcalOutOfRange(ValueError):
+    """Οι δηλωμένες θερμίδες δίνουν PAL έξω από τα όρια του πίνακα."""
+
+
+def kcal_average(days) -> float:
+    """Μέσος όρος θερμίδων ανά ημέρα ενός προγράμματος που επαναλαμβάνεται (1, 7 ή όσες ημέρες δηλώθηκαν)."""
+    days = list(days)
+    if not days or any(x is None or x <= 0 for x in days):
+        raise ValueError("Θερμίδες: θετική τιμή για κάθε ημέρα.")
+    return sum(days) / len(days)
+
+
+def pal_from_kcal(kcal_day: float, *, birth_date: date, today: date, sex: str, height_cm: float,
+                  weight_kg: float) -> float:
+    """PAL = δηλωμένες θερμίδες ανά ημέρα ÷ βασικός μεταβολισμός (ίδια εξίσωση με το Στοιχείο 40).
+    Σύμβαση συστήματος (απόφαση του χρήστη 11/11/2026). Έξω από τα όρια του πίνακα PAL: KcalOutOfRange."""
+    from davinci.fmt import num
+    user = e01.UserCategories(birth_date=birth_date, measurement_date=today, sex=sex, height_cm=height_cm)
+    b = e40.bmr(user, weight_kg).kcal
+    pal = kcal_day / b
+    lo, hi = e40.pal_bounds()
+    if not lo <= pal <= hi:
+        raise KcalOutOfRange(
+            f"Οι θερμίδες που έγραψες ({num(kcal_day, 0)} kcal την ημέρα κατά μέσο όρο) δεν ταιριάζουν με τον βασικό "
+            f"μεταβολισμό σου ({num(b, 0)} kcal): δέχομαι από {num(b * lo, 0)} έως {num(b * hi, 0)} kcal. Έλεγξε τις τιμές.")
+    return pal
+
+
 def _user(inp: PlanInput) -> e01.UserCategories:
     return e01.UserCategories(
         birth_date=inp.birth_date, measurement_date=inp.today, sex=inp.sex, height_cm=inp.height_cm,
@@ -132,7 +161,7 @@ def prepare(inp: PlanInput) -> Prep:
 
 def _maintain(inp: PlanInput, prep: Prep) -> PlanResult:
     user, w = prep.user, inp.weight_kg
-    energy = e40.assess(user, w, inp.pal, goal="maintain")
+    energy = e40.assess(user, w, inp.pal, goal="maintain", pal_exact=inp.kcal_day is not None)
     part = e42.partition("maintain", w * inp.fat_percent / 100, user, trained=user.resistance_training, bmi=prep.bmi.value)
     macros = e41.compute(energy.target_intake_kcal, user, w, goal="maintain")
     pres = e44.present(user, weight_kg=w, fat_percent=inp.fat_percent, start=inp.today, goal="maintain",
@@ -173,7 +202,7 @@ def plan(inp: PlanInput) -> PlanResult:
         if inp.aha_deficit is None:
             return PlanResult(prep, pending_choice=ch, messages=_messages(prep), notes=prep.notes)
         if inp.aha_deficit == "30%":
-            tdee = e40.assess(user, w, inp.pal, goal="maintain").tdee
+            tdee = e40.assess(user, w, inp.pal, goal="maintain", pal_exact=inp.kcal_day is not None).tdee
             deficit = tdee * e40.load_data()["aha"]["deficit_percent"] / 100
         else:
             deficit = float(inp.aha_deficit)
@@ -192,7 +221,7 @@ def plan(inp: PlanInput) -> PlanResult:
         else:
             part = e42.partition("loss", fat_kg, user, trained=trained, bmi=bmi,
                                  weekly_change_kg=-w * inp.rate_percent / 100)
-        energy = e40.assess(user, w, inp.pal, goal="loss", aha_deficit=inp.aha_deficit if deficit is not None else None,
+        energy = e40.assess(user, w, inp.pal, goal="loss", pal_exact=inp.kcal_day is not None, aha_deficit=inp.aha_deficit if deficit is not None else None,
                             rate_percent=None if deficit is not None else inp.rate_percent,
                             kcal_per_kg=part.e_kcal_per_kg, fat_in_healthy_range=healthy)
     except e01.InvalidInput as exc:

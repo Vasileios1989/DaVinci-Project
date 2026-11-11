@@ -62,19 +62,29 @@ h1 {font-weight: 800; letter-spacing: -.01em;}
 .dv-sub {font-size: .92rem; opacity: .9;}
 .dv-target {font-size: .85rem; color: rgba(242,243,247,.55);}
 h3 {font-size: 1.15rem;}
-/* ⓘ info των «Αποτελεσμάτων»: ανοίγει / κλείνει· γράμματα με πατούρες, κανονικό μέγεθος, γκριζωπά, πυκνές γραμμές */
-details.dv-info {background: #262B42; border: 1px solid rgba(255,255,255,.10); border-radius: 14px;
-  margin: .1rem 0 .9rem 0; padding: 0;}
-details.dv-info > summary {cursor: pointer; padding: .45rem .9rem; font-size: .92rem; font-weight: 600;
-  color: rgba(242,243,247,.85); list-style: none;}
+/* «ⓘ info»: μικρό κουμπί δίπλα στο στοιχείο· ανοίγει παράθυρο πάνω στην οθόνη, που κυλά και κλείνει (✕ ή έξω) */
+details.dv-info {display: inline-block; margin: 0 0 0 .45rem; vertical-align: baseline;}
+details.dv-info > summary {display: inline-block; cursor: pointer; list-style: none; white-space: nowrap;
+  font-size: .74rem; font-weight: 600; line-height: 1.2; color: #FFB199; background: rgba(255,112,67,.14);
+  border: 1px solid rgba(255,112,67,.35); border-radius: 999px; padding: .08rem .5rem;}
 details.dv-info > summary::-webkit-details-marker {display: none;}
-details.dv-info > summary::before {content: "▸"; display: inline-block; width: 1.1rem; opacity: .7;}
-details.dv-info[open] > summary::before {content: "▾";}
-details.dv-info[open] > summary {border-bottom: 1px solid rgba(255,255,255,.10);}
-.dv-info-body {padding: .55rem .95rem .7rem .95rem; font-family: Georgia, "Noto Serif", "Times New Roman", serif;
-  font-size: .95rem; line-height: 1.4; color: #C5C8D3;}
+details.dv-info[open] > summary::before {content: ""; position: fixed; inset: 0; background: rgba(0,0,0,.62);
+  z-index: 1000000; cursor: default;}
+details.dv-info[open] > summary::after {content: "✕"; position: fixed; z-index: 1000002; top: calc(10vh + .55rem);
+  right: calc(max(5vw, 50vw - 300px) + .7rem); font-size: 1.05rem; line-height: 1; color: #F2F3F7;
+  background: #2F3550; border-radius: 999px; padding: .35rem .5rem;}
+details.dv-info > .dv-info-body {position: fixed; z-index: 1000001; top: 10vh; left: max(5vw, 50vw - 300px);
+  right: max(5vw, 50vw - 300px); max-height: 76vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain; background: #1E2238; border: 1px solid rgba(255,255,255,.14); border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.55); padding: 1rem 1.1rem 1.1rem 1.1rem; white-space: normal; text-align: left;
+  font-family: Georgia, "Noto Serif", "Times New Roman", serif; font-size: .95rem; font-weight: 400;
+  line-height: 1.4; color: #C5C8D3;}
 .dv-info-body p {margin: 0 0 .3rem 0; font-size: .95rem; line-height: 1.4;}
-.dv-info-title {font-size: 1.02rem; font-weight: 700; color: #E6E8EF; margin: 0 0 .3rem 0;}
+.dv-info-body ol {margin: 0 0 .4rem 0; padding-left: 1.3rem;} .dv-info-body li {margin: 0 0 .25rem 0; font-size: .95rem;}
+.dv-info-body p.dv-info-small {font-size: .8rem; opacity: .75; margin-top: .5rem;}
+.dv-label {font-size: .9rem; margin: .35rem 0 -.6rem 0;}
+.dv-label-strong {font-size: 1.02rem; font-weight: 700; margin-top: 1rem;}
+.dv-info-title {font-size: 1.05rem; font-weight: 700; color: #E6E8EF; margin: 0 2.2rem .4rem 0;}
 .dv-info-title + .dv-info-title, .dv-info-body p + .dv-info-title {margin-top: .8rem;}
 .dv-info-h {font-size: .88rem; font-weight: 700; color: #DADDE6; margin: .55rem 0 .15rem 0;}
 /* αναλύσεις της άλιπης μάζας (μέσα στο κουτί που ανοίγει): μικρότερα γράμματα */
@@ -105,9 +115,67 @@ def cloud_call(fn):
         return None
 
 
-def sign_in_done(s: cloud.Session) -> None:
-    st.session_state.update(session=s, mode="account", history=[], _cloud_loaded=False)
-    st.rerun()
+# «Να με θυμάσαι»: η συσκευή κρατά σε cookie μόνο το διακριτικό ανανέωσης της σύνδεσης (όχι τον κωδικό).
+COOKIE, COOKIE_DAYS = "dv_rt", 60
+try:
+    import streamlit.components.v1 as components
+except Exception:  # χωρίς components (π.χ. στα τεστ) δεν γράφεται cookie
+    components = None
+
+
+def write_cookie(value: str | None) -> None:
+    """Γράφει (ή σβήνει, με None) το cookie στον browser. Κρατά και αντίγραφο στη συνεδρία, για έλεγχο."""
+    st.session_state["_cookie"] = value
+    if components is None:
+        return
+    age = COOKIE_DAYS * 86400 if value else 0
+    components.html(f"<script>try{{window.parent.document.cookie='{COOKIE}={value or ''}; path=/; max-age={age}; "
+                    "SameSite=Lax; Secure';}catch(e){}</script>", height=0)
+
+
+def read_cookie() -> str | None:
+    try:
+        return st.context.cookies.get(COOKIE) or None
+    except Exception:
+        return None
+
+
+def keep(s: cloud.Session) -> None:
+    """Νέα ή ανανεωμένη σύνδεση: στη συνεδρία και, με «Να με θυμάσαι», στο cookie (το διακριτικό αλλάζει κάθε φορά)."""
+    if st.session_state.get("session") == s:
+        return
+    st.session_state["session"] = s
+    if st.session_state.get("remember"):
+        write_cookie(s.refresh_token)
+
+
+def sign_in_done(s: cloud.Session, remember: bool = False, rerun: bool = True) -> None:
+    st.session_state.update(mode="account", history=[], _cloud_loaded=False, remember=remember)
+    st.session_state.pop("session", None)
+    keep(s)
+    if rerun:
+        st.rerun()
+
+
+def resume() -> None:
+    """Πριν από την οθόνη εισόδου: επιστροφή από τη Google (?code=…&dv=…) ή «Να με θυμάσαι» (cookie)."""
+    qp = getattr(st, "query_params", None)
+    code, nonce = (qp.get("code"), qp.get("dv")) if qp is not None else (None, None)
+    if code and nonce:
+        s = cloud_call(lambda: CLOUD.google_finish(code, nonce))
+        qp.clear()
+        if s:
+            sign_in_done(s, remember=True, rerun=False)
+            return
+    token = read_cookie()
+    if token and not st.session_state.get("_cookie_tried"):
+        st.session_state["_cookie_tried"] = True
+        try:
+            s = CLOUD.remembered(token)
+        except cloud.CloudError:
+            write_cookie(None)  # έληξε: ζητείται ξανά σύνδεση, χωρίς μήνυμα λάθους
+        else:
+            sign_in_done(s, remember=True, rerun=False)
 
 
 def entry_screen() -> None:
@@ -122,10 +190,15 @@ def entry_screen() -> None:
     with login:
         email = st.text_input("Email", key="li_email")
         pw = st.text_input("Κωδικός", type="password", key="li_pw")
+        remember = st.checkbox("Να με θυμάσαι", value=True, key="li_remember")
         if st.button("Σύνδεση", key="li_go", type="primary"):
             s = cloud_call(lambda: CLOUD.sign_in(email or "", pw or ""))
             if s:
-                sign_in_done(s)
+                sign_in_done(s, remember)
+        if CLOUD.app_url:
+            if "_google_url" not in st.session_state:
+                st.session_state["_google_url"] = CLOUD.google_url()
+            st.link_button("Σύνδεση με Google", st.session_state["_google_url"])
     with signup:
         email = st.text_input("Email", key="su_email")
         pw = st.text_input("Κωδικός (τουλάχιστον 8 χαρακτήρες)", type="password", key="su_pw")
@@ -162,6 +235,8 @@ def entry_screen() -> None:
 
 
 if CLOUD is not None and not st.session_state.get("mode"):
+    resume()
+if CLOUD is not None and not st.session_state.get("mode"):
     entry_screen()
 
 st.title("DaVinci Fitness")
@@ -170,7 +245,8 @@ if CLOUD is not None:
         st.caption(f"Συνδεδεμένος: {session().email}")
         if st.button("Αποσύνδεση", key="logout"):
             CLOUD.sign_out(session())
-            for k in ("session", "mode", "history", "_cloud_loaded"):
+            write_cookie(None)
+            for k in ("session", "mode", "history", "_cloud_loaded", "remember", "_google_url"):
                 st.session_state.pop(k, None)
             st.rerun()
     elif st.button("Σύνδεση ή νέος λογαριασμός", key="to_login"):
@@ -184,30 +260,117 @@ TODAY = al.today()
 
 # ------------------------------------------------------------------ στοιχεία χρήστη (όλα τα πεδία, σε περιοχές)
 # Περιοχές της καρτέλας «Μέτρηση»: (σύντομο όνομα καρτέλας, πλήρης τίτλος μέσα στην περιοχή).
-AREAS = (("Προσωπικά", "1. Προσωπικά στοιχεία"), ("Ζυγαριά", "2. Σύσταση σώματος (ζυγαριά)"),
-         ("Κορμός", "3. Περιφέρειες κορμού (μεζούρα)"), ("Άκρα", "4. Περιφέρειες άκρων (μεζούρα)"),
-         ("Ενυδάτωση", "5. Ενυδάτωση: έλεγχος Βάρος–Ούρα–Δίψα (18–59 ετών)"))
-PRO_AREAS = (("Όργανα", "6. Όργανα Professional (δερματοπτυχόμετρο, παχύμετρο οστών)"),
-             ("Εξετάσεις", "7. Ιατρικές εξετάσεις (προαιρετικά)"))
+# Περιοχές της «Μέτρησης» (απόφαση του χρήστη 11/11/2026, 6η): η ζυγαριά μέσα στα «Προσωπικά»·
+# η ενυδάτωση μόνο στο Professional. Χωρίς γκρι γραμμές-τίτλους.
+AREAS = ("Προσωπικά", "Κορμός", "Άκρα")
+PRO_AREAS = ("Ενυδάτωση", "Όργανα", "Εξετάσεις")
+
+# Θερμίδες που καίει ο χρήστης: ή επίπεδο δραστηριότητας (PAL) ή δηλωμένες θερμίδες (απόφαση του χρήστη 11/11/2026).
+MODES = ("Δραστηριότητα", "Σταθερό", "Εβδομαδιαίο", "Διαφοροποιημένο")
+KCAL_NOTE = ("Γράψε τις συνολικές θερμίδες όλης της ημέρας, όχι μόνο της προπόνησης.",
+             "Ο υπολογισμός χρησιμοποιεί τον μέσο όρο των ημερών.",
+             "Το ρολόι ή η εφαρμογή δίνει εκτίμηση, όχι μέτρηση.")
+MODE_INFO = {
+    "Δραστηριότητα": ("Για όποιον δεν ξέρει πόσες θερμίδες καίει.",
+                      "Διάλεξε το επίπεδο που σου ταιριάζει.",
+                      "Θερμίδες ημέρας = βασικός μεταβολισμός × επίπεδο δραστηριότητας (PAL)."),
+    "Σταθερό": ("Ίδιες θερμίδες κάθε μέρα.", *KCAL_NOTE),
+    "Εβδομαδιαίο": ("Θερμίδες για κάθε ημέρα της εβδομάδας.", "Το πρόγραμμα επαναλαμβάνεται κάθε εβδομάδα.",
+                    *KCAL_NOTE),
+    "Διαφοροποιημένο": ("Γράψε πόσες ημέρες έχει το πρόγραμμά σου και τις θερμίδες κάθε ημέρας.",
+                        "Μετά την τελευταία ημέρα ξεκινά πάλι από την πρώτη.", *KCAL_NOTE),
+}
+TRAINING_INFO = ("Αλλάζει τον υπολογισμό: πόση άλιπη μάζα αναμένεται να χαθεί μαζί με το λίπος.",
+                 "Επηρεάζει το βάρος-στόχο και το πλάνο.")
+VISCERAL_SCALE_INFO = ("Μόνο αν το δείχνει η ζυγαριά σου.", "Γράψε τον αριθμό όπως τον δείχνει, χωρίς μονάδα.")
+WEEKDAYS = ("Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο", "Κυριακή")
+CYCLE_DAYS = (2, 90)  # «Διαφοροποιημένο»: πόσες ημέρες μπορεί να έχει το πρόγραμμα (σύμβαση συστήματος)
+
+
+def pop_html(title: str, lines=(), steps=(), small: str | None = None, cls: str = "dv-info dv-guide") -> str:
+    """Το «ⓘ info» δίπλα σε ένα στοιχείο: πατάς και ανοίγει παράθυρο πάνω στην οθόνη, που κυλά και κλείνει (✕)."""
+    body = f'<div class="dv-info-title">{escape(title)}</div>'
+    if steps:
+        body += "<ol>" + "".join(f"<li>{escape(x)}</li>" for x in steps) + "</ol>"
+    body += "".join(f"<p>{escape(x)}</p>" for x in lines)
+    if small:
+        body += f'<p class="dv-info-small">{escape(small)}</p>'
+    return f'<details class="{cls}"><summary>ⓘ info</summary><div class="dv-info-body">{body}</div></details>'
+
+
+def guide_html(field: str | None, extra: tuple[str, ...] = ()) -> str:
+    """Οι οδηγίες μέτρησης ενός πεδίου ως «ⓘ info»· «» όταν δεν υπάρχουν."""
+    g = measurement.guide(field) if field else None
+    if g is None:
+        return pop_html("Σημείωση", extra) if extra else ""
+    return pop_html(g.title, extra, g.steps, g.protocol)
+
+
+def field_label(text: str, popup: str = "", strong: bool = False) -> None:
+    """Η ετικέτα ενός πεδίου με το «ⓘ info» στην ίδια γραμμή."""
+    cls = "dv-label dv-label-strong" if strong else "dv-label"
+    st.markdown(f'<div class="{cls}">{escape(text)}{popup}</div>', unsafe_allow_html=True)
+
+
+def fill_days(keys: tuple[str, ...]) -> None:
+    """«Ίδια τιμή σε όλες»: η τιμή της πρώτης ημέρας αντιγράφεται στις υπόλοιπες."""
+    first = st.session_state.get(keys[0])
+    if first is not None:
+        for k in keys[1:]:
+            st.session_state[k] = first
+
+
+def kcal_input(label: str, key: str):
+    return st.number_input(label, min_value=500.0, max_value=10000.0, value=None, step=10.0, format="%.0f", key=key)
+
+
+def activity_inputs():
+    """(κλειδί PAL ή None, μέσος όρος θερμίδων ανά ημέρα ή None, τι λείπει ή None)."""
+    field_label("Θερμίδες που καίω", strong=True)
+    mode = st.radio("Θερμίδες που καίω", MODES, horizontal=True, key="act_mode", label_visibility="collapsed")
+    field_label(mode, pop_html(mode, MODE_INFO[mode]))
+    if mode == "Δραστηριότητα":
+        pals = al.pal_options()
+        pal = st.selectbox("Επίπεδο δραστηριότητας (PAL)", list(pals), index=None, placeholder="Διάλεξε",
+                           format_func=lambda k: f"{k.replace('.', ',')} — {pals[k]}", key="pal",
+                           label_visibility="collapsed")
+        return pal, None, None if pal else "επίπεδο δραστηριότητας"
+    if mode == "Σταθερό":
+        days = [kcal_input("Θερμίδες την ημέρα (kcal)", "kcal_fixed")]
+    else:
+        if mode == "Εβδομαδιαίο":
+            names = WEEKDAYS
+            keys = tuple(f"kcal_w{i}" for i in range(7))
+        else:
+            n = st.number_input("Ημέρες προγράμματος", min_value=CYCLE_DAYS[0], max_value=CYCLE_DAYS[1], value=None,
+                                step=1, key="kcal_n")
+            if n is None:
+                return None, None, "ημέρες προγράμματος"
+            names = tuple(f"Ημέρα {i}" for i in range(1, int(n) + 1))
+            keys = tuple(f"kcal_d{i}" for i in range(1, int(n) + 1))
+        days = [kcal_input(f"{name} (kcal)", key) for name, key in zip(names, keys)]
+        st.button("Ίδια τιμή σε όλες", key="kcal_fill", on_click=fill_days, args=(keys,))
+    if any(x is None for x in days):
+        return None, None, "θερμίδες" if len(days) == 1 else "θερμίδες κάθε ημέρας"
+    return None, al.kcal_average(days), None
 
 
 def read_inputs() -> tuple[al.PlanInput | None, al.Measures, str | None]:
     """Όλα τα πεδία, σε περιοχές που διαλέγεις από πάνω. Επιστρέφει και το μήνυμα «Συμπλήρωσε: …» (ή None)."""
-    # Το επίπεδο διαλέγεται μέσα στην πρώτη περιοχή· οι περιοχές 6–7 υπάρχουν μόνο στο Professional (Στοιχείο 46).
+    # Το επίπεδο διαλέγεται μέσα στην πρώτη περιοχή· οι περιοχές του Professional υπάρχουν μόνο εκεί (Στοιχείο 46).
     pro = st.session_state.get("level") == "Professional"
     areas = AREAS + (PRO_AREAS if pro else ())
-    tabs = dict(zip((a[0] for a in areas), st.tabs([a[0] for a in areas])))
+    tabs = dict(zip(areas, st.tabs(list(areas))))
 
     with tabs["Προσωπικά"]:
-        st.caption(AREAS[0][1])
         mdate = st.date_input("Ημερομηνία μέτρησης", value=TODAY, min_value=date(1900, 1, 1), max_value=TODAY,
                               format="DD/MM/YYYY", key="mdate") or TODAY
         birth = st.date_input("Ημερομηνία γέννησης", value=None, min_value=date(1900, 1, 1), max_value=TODAY,
                               format="DD/MM/YYYY", key="birth")
         sex = st.radio("Φύλο", e01.load_data()["sexes"], horizontal=True, key="sex")
-        level = st.radio("Επίπεδο μέτρησης", e46_levels(), horizontal=True, key="level")
-        for x in al.level_info(level):
-            st.caption(x)
+        chosen = st.session_state.get("level") or e46_levels()[0]
+        field_label("Επίπεδο μέτρησης", pop_html(f"Επίπεδο {chosen}", al.level_info(chosen)))
+        level = st.radio("Επίπεδο μέτρησης", e46_levels(), horizontal=True, key="level", label_visibility="collapsed")
         height = measure_input("Ύψος (cm)", "height", "ύψος", min_value=90.0, max_value=230.0, optional=False)
         groups = {g["code"]: g["name"] for g in e01.load_data()["ancestry_groups"]}
         ancestry = st.selectbox("Καταγωγή", [None, *groups], format_func=lambda c: "Δεν δηλώνω" if c is None else groups[c],
@@ -219,28 +382,24 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures, str | None]:
                                  format_func=lambda c: "Δεν διάλεξα" if c is None else groups[c], key="mixed")
         profiles = (al.allowed_profiles(birth, mdate) or ("Υγεία",)) if birth else e01.load_data()["profiles"]
         profile = st.selectbox("Προφίλ", profiles, key="profile")
-        training = st.checkbox("Προπόνηση με βάρη ή μικτή", key="training")
         pregnant = breastfeeding = False
         if birth and e01.pregnancy_fields_visible(sex, e01.age_in_completed_years(birth, mdate)):
             pregnant = st.checkbox("Εγκυμοσύνη", key="pregnant")
             breastfeeding = st.checkbox("Θηλασμός", key="breastfeeding")
-        pals = al.pal_options()
-        pal = st.selectbox("Επίπεδο δραστηριότητας (PAL)", list(pals), index=None, placeholder="Διάλεξε",
-                           format_func=lambda k: f"{k.replace('.', ',')} — {pals[k]}", key="pal")
 
-    with tabs["Ζυγαριά"]:
-        st.caption(AREAS[1][1])
-        weight = measure_input("Βάρος (kg)", "weight", "βάρος", optional=False)
-        fat = measure_input("Λίπος %", "fat", "λίπος % (ζυγαριά)", max_value=99.9, optional=False)
-        muscle = measure_input("Μύες %", "m_muscle", "μύες % (ζυγαριά)", max_value=99.9)
-        water = measure_input("Υγρά %", "m_water", "υγρά % (ζυγαριά)", max_value=99.9)
-        bone = measure_input("Οστά %", "m_bone", "οστά % (ζυγαριά)", max_value=99.9)
-        visceral = measure_input("Σπλαχνικό λίπος — μόνο αν το δείχνει η ζυγαριά σου (χωρίς μονάδα)", "m_visceral",
-                                 "επίπεδο σπλαχνικού λίπους (ζυγαριά)", min_value=0.0)
-        amputation = st.checkbox("Ακρωτηριασμός (αλλάζει το βάρος)", key="m_amputation")
+        # Ζυγαριά: όλα υποχρεωτικά· οι οδηγίες μία φορά, στην επικεφαλίδα
+        field_label("Ζυγαριά", guide_html("λίπος % (ζυγαριά)"), strong=True)
+        weight = measure_input("Βάρος (kg)", "weight", None, optional=False)
+        fat = measure_input("Λίπος %", "fat", None, max_value=99.9, optional=False)
+        muscle = measure_input("Μύες %", "m_muscle", None, max_value=99.9, optional=False)
+        water = measure_input("Υγρά %", "m_water", None, max_value=99.9, optional=False)
+        bone = measure_input("Οστά %", "m_bone", None, max_value=99.9, optional=False)
+
+        pal, kcal_day, activity_missing = activity_inputs()
+        field_label("Προπόνηση με βάρη ή μικτή", pop_html("Προπόνηση με βάρη ή μικτή", TRAINING_INFO))
+        training = st.checkbox("Ναι", key="training")
 
     with tabs["Κορμός"]:
-        st.caption(AREAS[2][1])
         neck = measure_input("Λαιμός (cm)", "m_neck", "λαιμός")
         chest = measure_input("Στήθος (cm)", "m_chest", "στήθος", extra=al.guide_extra("στήθος", sex))
         waist = measure_input("Μέση (cm)", "m_waist", "μέση")
@@ -248,50 +407,55 @@ def read_inputs() -> tuple[al.PlanInput | None, al.Measures, str | None]:
         shoulders = measure_input("Ώμοι (cm)", "m_shoulders", "ώμοι")
 
     with tabs["Άκρα"]:
-        st.caption(AREAS[3][1])
         arm_rel = measure_input("Μπράτσο χαλαρό (cm)", "m_arm_rel", "δικέφαλος χαλαρός")
         biceps = measure_input("Δικέφαλος σφιγμένος (cm)", "m_biceps", "δικέφαλος σφιγμένος")
         fore_rel = measure_input("Πήχης χαλαρός (cm)", "m_fore_rel", "πήχης")
-        fore_flx = measure_input("Πήχης σφιγμένος (cm)", "m_fore_flx", "πήχης σφιγμένος")
-        st.caption(al.arm_field_note())
-        wrist = measure_input("Καρπός (cm)", "m_wrist", "καρπός")
-        st.caption(al.field_note(27))
+        fore_flx = measure_input("Πήχης σφιγμένος (cm)", "m_fore_flx", "πήχης σφιγμένος",
+                                 extra=(al.arm_field_note(),))
+        wrist = measure_input("Καρπός (cm)", "m_wrist", "καρπός", extra=(al.field_note(27),))
         arm_injured = st.checkbox("Τραυματισμός ή πρήξιμο στο δεξί χέρι ή στον καρπό", key="m_arm_injured")
         thigh = measure_input("Άνω μηρός — ακριβώς κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh", "άνω μηρός")
         thigh18 = measure_input("Μηρός — 1 cm κάτω από τη γλουτιαία πτυχή (cm)", "m_thigh18", "μηρός")
-        knee = measure_input("Πάνω από το γόνατο (cm)", "m_knee", "γόνατο")
-        st.caption(al.field_note(29))
+        knee = measure_input("Πάνω από το γόνατο (cm)", "m_knee", "γόνατο", extra=(al.field_note(29),))
         swollen = st.checkbox("Το γόνατο είναι πρησμένο ή τραυματισμένο", key="m_knee_swollen")
-        calf = measure_input("Γάμπα (cm)", "m_calf", "γάμπα")
-        st.caption(al.field_note(26))
-        ankle = measure_input("Αστράγαλος (cm)", "m_ankle", "αστράγαλος")
-        st.caption(al.ankle_field_note())
-        st.caption(al.field_note(28))
+        calf = measure_input("Γάμπα (cm)", "m_calf", "γάμπα", extra=(al.field_note(26),))
+        ankle = measure_input("Αστράγαλος (cm)", "m_ankle", "αστράγαλος",
+                              extra=(al.ankle_field_note(), al.field_note(28)))
         edema = st.checkbox("Πρήξιμο (οίδημα) στα πόδια ή στον αστράγαλο", key="m_edema")
         injured = st.checkbox("Ο αστράγαλος είναι τραυματισμένος (π.χ. διάστρεμμα)", key="m_ankle_injured")
         leg_injured = st.checkbox("Τραυματισμός στο δεξί πόδι (μηρός ή γάμπα)", key="m_leg_injured")
         lipedema = (st.checkbox("Έχω διάγνωση λιποιδήματος από γιατρό", key="m_lipedema")
                     if sex == "Γυναίκα" else False)
 
-    with tabs["Ενυδάτωση"]:
-        st.caption(AREAS[4][1])
-        hydration = hydration_inputs()
+    hydration = {}
+    if pro:  # η ενυδάτωση (έλεγχος Βάρος–Ούρα–Δίψα) μόνο στο Professional
+        with tabs["Ενυδάτωση"]:
+            hydration = hydration_inputs()
     medical = professional_inputs(sex, birth, tabs["Όργανα"], tabs["Εξετάσεις"]) if pro else {}
-    m = al.Measures(waist_cm=waist, upper_thigh_cm=thigh, scale_visceral_level=visceral, scale_muscle_percent=muscle,
+    m = al.Measures(waist_cm=waist, upper_thigh_cm=thigh, scale_muscle_percent=muscle,
                     scale_water_percent=water, scale_bone_percent=bone, hip_cm=hip, neck_cm=neck, chest_cm=chest,
                     shoulders_cm=shoulders, arm_relaxed_cm=arm_rel, biceps_flexed_cm=biceps,
                     forearm_relaxed_cm=fore_rel, forearm_flexed_cm=fore_flx, wrist_cm=wrist, thigh_cm=thigh18,
                     knee_cm=knee, knee_swollen=swollen, calf_cm=calf, ankle_cm=ankle, leg_edema=edema,
-                    ankle_injured=injured, arm_injured=arm_injured, leg_injured=leg_injured, lipedema=lipedema, amputation=amputation,
+                    ankle_injured=injured, arm_injured=arm_injured, leg_injured=leg_injured, lipedema=lipedema,
                     **hydration, **medical)
 
     missing = [n for n, v in (("ημερομηνία γέννησης", birth), ("ύψος", height), ("βάρος", weight), ("λίπος", fat),
-                              ("επίπεδο δραστηριότητας", pal)) if v is None]
+                              ("μύες", muscle), ("υγρά", water), ("οστά", bone)) if v is None]
+    if activity_missing:
+        missing.append(activity_missing)
     if missing:
         return None, m, "Συμπλήρωσε: " + ", ".join(missing) + "."
+    if kcal_day is not None:
+        try:
+            pal = al.pal_from_kcal(kcal_day, birth_date=birth, today=mdate, sex=sex, height_cm=height,
+                                   weight_kg=weight)
+        except al.KcalOutOfRange as e:
+            return None, m, str(e)
     inp = al.PlanInput(birth_date=birth, sex=sex, height_cm=height, weight_kg=weight, fat_percent=fat, today=mdate,
                        ancestry=ancestry, mixed_chosen_group=mixed, profile=profile, resistance_training=training,
-                       pregnant=pregnant, breastfeeding=breastfeeding, pal=float(pal), level=level)
+                       pregnant=pregnant, breastfeeding=breastfeeding, pal=float(pal), level=level,
+                       kcal_day=kcal_day)
     return inp, m, None
 
 
@@ -355,7 +519,6 @@ def skinfold_inputs(sex: str) -> dict:
 def professional_inputs(sex: str, birth, tab_tools, tab_medical) -> dict:
     """Περιοχές 6 και 7: μόνο στο επίπεδο Professional (Στοιχείο 46)."""
     with tab_tools:
-        st.caption(PRO_AREAS[0][1])
         elbow = measure_input("Εύρος αγκώνα (cm)", "p_elbow", "εύρος αγκώνα")
         elbow_left = st.checkbox("Μέτρηση στο αριστερό χέρι (το δεξί δεν μπορεί να μετρηθεί)", key="p_elbow_left")
         elbow_cond = st.checkbox("Κάταγμα, φλεγμονή ή οίδημα στον αγκώνα", key="p_elbow_cond")
@@ -371,8 +534,9 @@ def professional_inputs(sex: str, birth, tab_tools, tab_medical) -> dict:
         knee_inj = st.checkbox("Τραυματισμός, πρόθεση ή αρθρίτιδα στο δεξί γόνατο", key="p_knee_inj")
         sf = skinfold_inputs(sex)
     with tab_medical:
-        st.caption(PRO_AREAS[1][1])
         st.caption(al.medical_message())
+        visceral = measure_input("Σπλαχνικό λίπος — ζυγαριά", "m_visceral", "επίπεδο σπλαχνικού λίπους (ζυγαριά)",
+                                 min_value=0.0, extra=VISCERAL_SCALE_INFO)
         ct = measure_input("Σπλαχνικό λίπος — αξονική ή μαγνητική τομογραφία (cm²)", "x_ct", None)
         vol = measure_input("Σπλαχνικό λίπος — DXA ή μαγνητική: όγκος ή μάζα (μονάδα της γνωμάτευσης)", "x_vol", None)
         mus = measure_input("Σκελετικοί μύες — ιατρική μέτρηση (kg)", "x_muscle", None)
@@ -390,7 +554,8 @@ def professional_inputs(sex: str, birth, tab_tools, tab_medical) -> dict:
                                 key="x_meno")
     return dict(elbow_cm=elbow, elbow_left_arm=elbow_left, elbow_condition=elbow_cond,
                 knee_breadths=tuple(x for x in knee if x is not None), knee_measured_by=measured_by, knee_side=side,
-                knee_breadth_edema=knee_edema, knee_breadth_injured=knee_inj, **sf, ct_visceral_cm2=ct, visceral_volume=vol, medical_muscle_kg=mus, isotope_water_kg=wat,
+                knee_breadth_edema=knee_edema, knee_breadth_injured=knee_inj, **sf, scale_visceral_level=visceral,
+                ct_visceral_cm2=ct, visceral_volume=vol, medical_muscle_kg=mus, isotope_water_kg=wat,
                 serum_osmolality=osm, osmolality_inputs=tuple(calc) if all(x is not None for x in calc) else None,
                 dxa_bone_kg=bone, t_score=t, z_score=z, menopause=None if meno is None else meno == "Ναι")
 
@@ -480,32 +645,17 @@ def tab_plan(inp: al.PlanInput) -> None:
 
 
 # ------------------------------------------------------------------ μετρήσεις (Στοιχεία 05–39, σε δόσεις)
-def guide_box(field: str | None, extra: tuple[str, ...] = ()) -> None:
-    if field is None:
-        return
-    g = measurement.guide(field)
-    if g is None:
-        return
-    with st.expander(f"ⓘ {g.title}"):
-        for i, step in enumerate(g.steps, start=1):
-            st.markdown(f"{i}. {step}")
-        for x in extra:
-            st.info(x)
-        if g.protocol:
-            st.caption(g.protocol)
-
-
 OPTIONAL = "Προαιρετικό"
 SKINFOLD_RANGE = (2, 50)  # Στοιχεία 33–36: τιμή κάτω από 2 ή πάνω από 50 mm ζητά επιβεβαίωση
 
 
 def measure_input(label: str, key: str, field: str | None, *, min_value: float | None = 0.1,
                   max_value: float | None = None, extra: tuple[str, ...] = (), optional: bool = True):
-    """Τα προαιρετικά πεδία δείχνουν αχνό «Προαιρετικό» μέσα στο κουτί, που χάνεται όταν γράψεις τιμή."""
-    v = st.number_input(label, min_value=min_value, max_value=max_value, value=None, step=0.1, format="%.1f", key=key,
-                        placeholder=OPTIONAL if optional else None)
-    guide_box(field, extra)
-    return v
+    """Ετικέτα με το «ⓘ info» (οδηγίες μέτρησης) στην ίδια γραμμή και από κάτω το πεδίο.
+    Τα προαιρετικά πεδία δείχνουν αχνό «Προαιρετικό» μέσα στο κουτί, που χάνεται όταν γράψεις τιμή."""
+    field_label(label, guide_html(field, tuple(x for x in extra if x)))
+    return st.number_input(label, min_value=min_value, max_value=max_value, value=None, step=0.1, format="%.1f",
+                           key=key, placeholder=OPTIONAL if optional else None, label_visibility="collapsed")
 
 
 BR = "  \n"  # αλλαγή γραμμής μέσα στην ίδια παράγραφο (markdown)
@@ -515,7 +665,7 @@ def _pair(label: str, value: str, cls: str = "dv-v") -> str:
     return f'<b>{escape(label)}</b>: <span class="{cls}">{escape(value)}</span>'
 
 
-def row_html(r: rv.Row) -> str:
+def row_html(r: rv.Row, popup: str = "") -> str:
     """Μία γραμμή: όνομα και μέτρηση (κανονικό χρώμα), αλλαγή προς τον στόχο (κόκκινο ▼ / πράσινο ▲),
     δευτερεύουσες γραμμές, και από κάτω (Στόχος: …) με μικρά γκρι γράμματα."""
     if r.value is not None:
@@ -528,42 +678,40 @@ def row_html(r: rv.Row) -> str:
         head += f' <span class="dv-note">· {escape(r.note)}</span>'
     if r.change:
         head += "".join(f' <span class="dv-{d}">{escape(t)}</span>' for d, t in r.change.parts)
-    out = [head] + [f'<div class="dv-sub">{_pair(a, b)}</div>' for a, b in r.subs]
+    out = [head + popup] + [f'<div class="dv-sub">{_pair(a, b)}</div>' for a, b in r.subs]
     if r.target_word:
         out.append(f'<div class="dv-target">({escape(r.target_word)}: {escape(r.target)})</div>')
     return f'<div class="dv-row dv-l{r.level}">' + "".join(out) + "</div>"
 
 
-def info_html(cards) -> str:
-    """Το «ⓘ info»: ανοίγει και κλείνει. Μέσα, ανά κάρτα: τίτλος το όνομα του στοιχείου και από κάτω οι ενότητες
-    (Στόχος · Λεπτομέρειες · Ενδεικτική · Προειδοποιήσεις · Σχόλια). «» όταν δεν υπάρχει τίποτα να γραφτεί."""
-    blocks = []
-    for card in cards:
-        if not card.info:
-            continue
-        h = f'<div class="dv-info-title">{escape(card.title)}</div>'
-        for title, lines in card.info:
-            h += f'<div class="dv-info-h">{escape(title)}</div>'
-            h += "".join(f"<p>{(f'<b>{escape(a)}:</b> ' if a else '')}{escape(b)}</p>" for a, b in lines)
-        blocks.append(h)
-    if not blocks:
+def info_html(card) -> str:
+    """Το «ⓘ info» ενός στοιχείου των «Αποτελεσμάτων», δίπλα στο όνομά του: παράθυρο που κυλά και κλείνει.
+    Μέσα: τίτλος το όνομα του στοιχείου και οι ενότητες (Στόχος · Λεπτομέρειες · Ενδεικτική · Προειδοποιήσεις ·
+    Σχόλια). «» όταν δεν υπάρχει τίποτα να γραφτεί."""
+    if not card.info:
         return ""
-    return ('<details class="dv-info"><summary>ⓘ info</summary><div class="dv-info-body">' + "".join(blocks)
-            + "</div></details>")
+    h = f'<div class="dv-info-title">{escape(card.title)}</div>'
+    for title, lines in card.info:
+        h += f'<div class="dv-info-h">{escape(title)}</div>'
+        h += "".join(f"<p>{(f'<b>{escape(a)}:</b> ' if a else '')}{escape(b)}</p>" for a, b in lines)
+    return f'<details class="dv-info"><summary>ⓘ info</summary><div class="dv-info-body">{h}</div></details>'
+
+
+def card_html(card, small: bool = False) -> str:
+    """Οι γραμμές μιας κάρτας· το «ⓘ info» στην πρώτη γραμμή, δίπλα στο στοιχείο."""
+    rows = "".join(row_html(r, info_html(card) if i == 0 else "") for i, r in enumerate(card.rows))
+    return f'<div class="dv-small">{rows}</div>' if small else rows
 
 
 def show_card(card: rv.Card, small: bool = False) -> None:
     """Οι γραμμές της κάρτας και ό,τι λείπει ορατά· όλα τα κείμενα (σχόλια, «Ενδεικτική», προειδοποιήσεις) στο ⓘ.
-    small: μέσα σε ανάλυση που ανοίγει / κλείνει — μικρότερα γράμματα, και το ⓘ ένα, στο τέλος της ανάλυσης."""
-    rows = "".join(row_html(r) for r in card.rows)
-    st.markdown(f'<div class="dv-small">{rows}</div>' if small else rows, unsafe_allow_html=True)
+    small: μέσα σε ανάλυση που ανοίγει / κλείνει — μικρότερα γράμματα."""
+    st.markdown(card_html(card, small), unsafe_allow_html=True)
     if card.table and card.show_table:  # ο πίνακας της ανάλυσης άλιπης μάζας φαίνεται ως γραμμές
         head, *body = card.table
         st.dataframe([dict(zip(head, r)) for r in body], hide_index=True)
     for n in card.needs:
         st.info(n)
-    if not small and card.info:
-        st.markdown(info_html([card]), unsafe_allow_html=True)
 
 
 def show_part(part: rv.Part) -> None:
@@ -573,10 +721,6 @@ def show_part(part: rv.Part) -> None:
         st.markdown(BR.join(f"**{label}:** {v}" for label, v in part.lines))
     for card in part.cards:
         show_card(card, small=part.fold)
-    if part.fold:
-        info = info_html(part.cards)
-        if info:
-            st.markdown(info, unsafe_allow_html=True)
 
 
 def show_group(group: rv.Group) -> None:
@@ -634,7 +778,8 @@ def history() -> list[dict]:
         got = cloud_call(lambda: CLOUD.list(s))
         if got is not None:
             rows, s = got
-            st.session_state.update(history=hist.ordered(rows), session=s, _cloud_loaded=True)
+            st.session_state.update(history=hist.ordered(rows), _cloud_loaded=True)
+            keep(s)
     return st.session_state.setdefault("history", [])
 
 
@@ -646,7 +791,7 @@ def store(entry: dict) -> bool:
     s = cloud_call(lambda: CLOUD.save(s, entry))
     if s is None:
         return False
-    st.session_state["session"] = s
+    keep(s)
     return True
 
 
@@ -657,7 +802,7 @@ def unstore(day: str) -> bool:
     s = cloud_call(lambda: CLOUD.delete(s, day))
     if s is None:
         return False
-    st.session_state["session"] = s
+    keep(s)
     return True
 
 
@@ -682,14 +827,8 @@ def show_entry(entry: dict) -> None:
                 st.markdown(f"**{escape(p['heading'])}**")
             if p["lines"]:
                 st.markdown(BR.join(f"**{a}:** {b}" for a, b in p["lines"]))
-            cards = [hist.card_from(c) for c in p["cards"]]
-            for card in cards:
-                rows = "".join(row_html(r) for r in card.rows)
-                st.markdown(f'<div class="dv-small">{rows}</div>' if p["fold"] else rows, unsafe_allow_html=True)
-                if not p["fold"] and card.info:
-                    st.markdown(info_html([card]), unsafe_allow_html=True)
-            if p["fold"] and info_html(cards):
-                st.markdown(info_html(cards), unsafe_allow_html=True)
+            for c in p["cards"]:
+                st.markdown(card_html(hist.card_from(c), p["fold"]), unsafe_allow_html=True)
 
 
 def tab_history(inp: al.PlanInput | None, m: al.Measures, groups) -> None:

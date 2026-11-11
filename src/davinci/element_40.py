@@ -99,6 +99,13 @@ def rate_range(goal: str, level: str | None) -> tuple[float, float] | None:
     return None
 
 
+def pal_bounds(athlete: bool = False) -> tuple[float, float]:
+    """Το μικρότερο και το μεγαλύτερο PAL του πίνακα (χωρίς τα 2,2 / 2,4 όταν δεν είναι αθλητής)."""
+    d = load_data()
+    keys = [float(k) for k in d["pal"] if athlete or k not in d["pal_athlete_only"]]
+    return min(keys), max(keys)
+
+
 def assess(user: e01.UserCategories, weight_kg: float, pal: float, *, goal: str = "maintain",
            athlete: bool = False, fat_free_mass_kg: float | None = None, ffm_indicative: bool = False,
            rate_percent: float | None = None, training_years: float | None = None,
@@ -106,7 +113,8 @@ def assess(user: e01.UserCategories, weight_kg: float, pal: float, *, goal: str 
            confirmed_fast_rate: bool = False, lea_signs: bool = False, lea_cleared: bool = False,
            trimester: int | None = None, pre_pregnancy_weight_kg: float | None = None, twins: bool = False,
            lactation_exclusive_months: float | None = None, condition: str | None = None,
-           watch_kcal: float | None = None, fat_in_healthy_range: bool | None = None) -> EnergyResult:
+           watch_kcal: float | None = None, fat_in_healthy_range: bool | None = None,
+           pal_exact: bool = False) -> EnergyResult:
     """goal: «loss» · «maintain» · «gain». aha_deficit (ΔΜΣ ≥ 25, απώλεια): 500 · 750 · «30%».
     condition: η φράση που μπαίνει στη θέση του «Η [κατάσταση/το φάρμακο]» (π.χ. «Η θεραπεία του θυρεοειδούς»).
     fat_in_healthy_range: από το Στοιχείο 02. Με ΔΜΣ ≥ 25 και λίπος στο υγιές εύρος ο ΔΜΣ είναι αυξημένος από
@@ -118,7 +126,14 @@ def assess(user: e01.UserCategories, weight_kg: float, pal: float, *, goal: str 
     if goal not in ("loss", "maintain", "gain"):
         raise e01.InvalidInput("Στόχος: loss · maintain · gain.")
     key = f"{pal:.1f}"
-    if key not in d["pal"]:
+    if pal_exact:
+        # Συμπλήρωμα (11/11/2026, σύμβαση συστήματος): PAL από τις θερμίδες που δήλωσε ο χρήστης
+        # (θερμίδες ÷ BMR)· δεν είναι τιμή του πίνακα, αλλά μένει μέσα στα όριά του.
+        lo, hi = pal_bounds(athlete)
+        if not lo <= pal <= hi:
+            raise e01.InvalidInput(f"PAL από θερμίδες: {num(lo)} έως {num(hi)}.")
+        key = ""
+    elif key not in d["pal"]:
         raise e01.InvalidInput(f"PAL: {', '.join(d['pal'])}.")
     if key in d["pal_athlete_only"] and not athlete:
         raise e01.InvalidInput("Τα PAL 2,2 και 2,4 δίνονται μόνο σε αθλητή.")
@@ -142,6 +157,8 @@ def assess(user: e01.UserCategories, weight_kg: float, pal: float, *, goal: str 
     msgs.append(m["result"].replace("[TDEE]", kcal(tdee)).replace("[κάτω]", kcal(rng[0])).replace(
         "[πάνω]", kcal(rng[1])).replace("[BMR]", kcal(b.kcal)).replace("[PAL]", num(pal)))
     msgs.append(m["initial"])
+    if pal_exact:
+        msgs.append(m["pal_from_kcal"])
     if b.out_of_sample:
         msgs.append(m["athlete_out"])
         indicative = True

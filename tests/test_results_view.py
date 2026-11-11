@@ -66,14 +66,20 @@ def test_nothing_is_lost_or_changed(name):
     want_lines = Counter((clean(a), clean(b)) for s in sections for a, b in s.lines)
     got_lines = Counter(x for c in cs for x in (*c.main, *c.targets, *c.details))
     assert got_lines == want_lines
-    assert Counter(x for c in cs for x in c.messages) == Counter(clean(x) for s in sections for x in s.messages)
+    assert Counter(x for c in cs for x in (*c.messages, *c.needs)) == \
+        Counter(clean(x) for s in sections for x in s.messages)
     assert Counter(x for c in cs for x in c.warnings) == Counter(clean(x) for s in sections for x in s.warnings)
     assert Counter(c.table for c in cs if c.table) == Counter(s.table for s in sections if s.table)
     # η σήμανση «Ενδεικτική» (Κ0) ακολουθεί την ενότητά της
     by_title = {rv.clean_title(s.title): s for s in sections}
     assert len(by_title) == len(sections)  # κανένας τίτλος δεν συμπίπτει μετά την αφαίρεση του «(Στοιχείο …)»
-    for g in groups:
-        assert g.title != rv.OTHER, [c.title for c in g.cards]  # κάθε ενότητα έχει τη θέση της
+    known = {c.title for g in groups if g.title != rv.OTHER for c in g.cards}
+    other = [c.title for g in groups if g.title == rv.OTHER for c in g.cards]
+    assert not known & set(other)
+    # κάθε γραμμή του κώδικα φαίνεται: στη γραμμή της οθόνης (τιμή ή δευτερεύουσα γραμμή) ή αυτούσια στο ⓘ
+    for c in cs:
+        for ln in (*c.main, *c.targets, *c.details):
+            assert ln in c.info_lines or any(ln[1] == r.value or ln in r.subs for r in c.rows), (c.title, ln)
 
 
 @pytest.mark.parametrize("name", CASES)
@@ -98,20 +104,89 @@ def test_clean_text_removes_only_the_element_reference():
 
 def test_order_follows_the_report():
     groups, _ = rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])
-    assert [g.title for g in groups] == ["Βασικά στοιχεία", "Σύσταση σώματος", "Μετρήσεις κορμού", "Μετρήσεις άκρων",
-                                         "Αναλογίες κορμού", "Αναλογίες άκρων", "Σκελετός και δερματοπτυχές",
-                                         "Σωματότυπος", "Ενυδάτωση"]
-    by = {g.title: [c.title for c in g.cards] for g in groups}
-    assert by["Σύσταση σώματος"] == ["Βάρος", "Λίπος", "Σπλαχνικό λίπος", "Άλιπη μάζα", "Σκελετικοί μύες", "Ξηροί μύες",
-                                     "Υγρά", "Οστά", "Ανάλυση άλιπης μάζας", "Λόγος μυών / λίπους",
-                                     "Λόγος άλιπης / λίπους", "Δείκτης Άλιπης Μάζας (ΔΑΜ)", "ΔΜΣ"]
-    assert by["Μετρήσεις κορμού"] == ["Μέση", "Ισχίο", "Λαιμός", "Στήθος", "Ώμοι"]
-    assert by["Μετρήσεις άκρων"] == ["Μπράτσο και δικέφαλος", "Πήχης", "Καρπός", "Μηρός", "Πάνω από το γόνατο", "Γάμπα",
-                                     "Αστράγαλος"]
+    assert [g.title for g in groups] == list(rv.TAB_TITLES) == [
+        "Βασικά", "Σύσταση", "Ιστοί (Α)", "Συστατικά (Β)", "Δείκτες", "Κορμός", "Άκρα", "Αναλογίες κορμού",
+        "Αναλογίες άκρων", "Άλλα"]
+    by = {g.title: [r.name for c in g.cards for r in c.rows] for g in groups}
+    assert by["Σύσταση"] == ["Βάρος", "Λίπος", "Σπλαχνικό λίπος (Εκτίμηση)", "Άλιπη μάζα"]
+    assert by["Ιστοί (Α)"] == ["Σκελετικοί μύες", "Ξηροί μύες (εκτίμηση)", "Λοιποί ιστοί"]
+    assert by["Συστατικά (Β)"] == ["Νερό", "Ξηρή άλιπη μάζα", "Οστικά μέταλλα", "Λοιπά", "Πρωτεΐνη (τυπική τιμή)",
+                                   "Γλυκογόνο (τυπική τιμή)", "Άλλα μέταλλα (τυπική τιμή)", "Διαφορά"]
+    assert by["Δείκτες"] == ["Λόγος μυών / λίπους", "Λόγος άλιπης / λίπους", "Δείκτης Άλιπης Μάζας (ΔΑΜ)",
+                             "Κανονικοποιημένος ΔΑΜ", "ΔΜΣ"]
+    assert by["Κορμός"] == ["Μέση", "Ισχίο", "Λαιμός", "Στήθος", "Ώμοι"]
+    assert by["Άκρα"] == ["Μπράτσο χαλαρό", "Δικέφαλος σφιγμένος", "Πήχης χαλαρός", "Πήχης σφιγμένος", "Καρπός",
+                          "Μηρός", "Πάνω από το γόνατο", "Γάμπα", "Αστράγαλος"]
     assert by["Αναλογίες κορμού"] == ["Λόγος μέσης / ισχίου", "Λόγος μέσης / ύψους", "Λόγος στήθους / μέσης",
                                       "Λόγος ώμων / μέσης"]
     assert by["Αναλογίες άκρων"] == ["Λόγος πήχη / δικεφάλου", "Λόγος μηρού / γάμπας", "Λόγος καρπού / δικεφάλου",
                                      "Λόγος μηρού / γονάτου", "Λόγος αστραγάλου / γάμπας"]
+    heads = {g.title: g.heading for g in groups}
+    assert heads["Ιστοί (Α)"] == "Α. Άλιπη μάζα σε ιστούς" and heads["Συστατικά (Β)"] == "Β. Άλιπη μάζα σε συστατικά"
+
+
+def rows_of(groups):
+    return {r.name: r for g in groups for c in g.cards for r in c.rows}
+
+
+def test_rows_values_targets_and_changes():
+    groups, _ = rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])
+    r = rows_of(groups)
+    w = r["Βάρος"]
+    assert (w.value, w.target_word, w.target) == ("138,9 kg", "Στόχος", "≈ 79,2 kg έως ≈ 67,8 kg")
+    assert w.change.parts == (("down", "▼ −59,7 kg έως −71,1 kg, −43,0% έως −51,2%"),)
+    fat = r["Λίπος"]  # ποσοστό: η αλλαγή σε ποσοστιαίες μονάδες, χωρίς «% της μέτρησης»
+    assert fat.target == "13,0% έως 6,0%" and fat.change.parts == (("down", "▼ −30,2% έως −37,2%"),)
+    assert ("Ταξινόμηση", "Παχυσαρκία") in fat.subs
+    mus = r["Σκελετικοί μύες"]
+    assert mus.note == "52,6% της άλιπης" and mus.target_word == "Ενδεικτικός στόχος"
+    assert mus.change.parts[0][0] == "down" and r["Ξηροί μύες (εκτίμηση)"].level == 1
+    assert r["Λοιποί ιστοί"].target == rv.NO_TARGET and r["Λοιποί ιστοί"].change is None
+    assert r["Νερό"].target_word == "Ενδεικτικός στόχος" and r["Νερό"].value.endswith("(ζυγαριά)")
+    assert r["Πρωτεΐνη (τυπική τιμή)"].level == 2 and r["Πρωτεΐνη (τυπική τιμή)"].value.startswith("≈ ")
+    up = r["Λόγος στήθους / μέσης"]  # «≥»: πρέπει να ανέβει → πράσινο ▲
+    assert up.target_word == "Ελάχιστος λόγος" and all(d == "up" for d, _ in up.change.parts)
+    assert r["Ισχίο"].target_word == "Αναμενόμενο"  # εκτίμηση του κώδικα: η λέξη μένει
+    assert r["Λόγος μέσης / ύψους"].target == "κάτω από 0,50"
+    assert r["Λόγος μέσης / ισχίου"].change is None  # ο στόχος είναι μέση σε cm, όχι λόγος: καμία αλλαγή
+    assert r["Λαιμός"].target == rv.NO_TARGET and r["Καρπός"].target_word == "Στόχος"
+    dam = r["Δείκτης Άλιπης Μάζας (ΔΑΜ)"]
+    pts = al._targets(138.9, 43.2, al.prepare(CASES["άνδρας 139 kg, όλα τα πεδία"][0]).user)
+    assert dam.target == " έως ".join(f"≈ {x} kg/m²" for x in (rv.num(p.ffmi, 1) for p in pts))
+
+
+def test_change_rules():
+    assert rv.change("146,0 cm", ["κάτω από 88,5 cm"]).parts == (("down", "▼ −57,5 cm, −39,4%"),)
+    assert rv.change("80,0 cm", ["κάτω από 88,5 cm"]) is None  # ήδη κάτω από τον στόχο
+    assert rv.change("45,5 cm", ["≥ 37,7 cm", "≥ 35,2 cm"]) is None  # ήδη πάνω από το ελάχιστο
+    assert rv.change("30,0 cm", ["≥ 34,1 cm"]).parts == (("up", "▲ +4,1 cm, +13,7%"),)
+    assert rv.change("0,69", ["3,5", "8,2"]).parts[0][0] == "up"
+    mixed = rv.change("1,50", ["≈ 1,40", "≈ 1,60"]).parts  # ανάμεσα σε δύο στόχους: ένα κομμάτι ανά κατεύθυνση
+    assert [d for d, _ in mixed] == ["down", "up"]
+    assert rv.change("54,2 kg", ["≈ 54,2 kg"]) is None
+    assert rv.change("40,0 cm", ["≈ 0,88"]) is None  # διαφορετική μονάδα: δεν συγκρίνεται
+    assert rv._heads("≈ 79,2 kg (−59,7) → ≈ 67,8 kg (−71,1)") == ["≈ 79,2 kg", "≈ 67,8 kg"]
+    assert rv._heads("6,0–13,0%") == ["6,0%", "13,0%"] and rv._heads("3,5 – 8,2") == ["3,5", "8,2"]
+    assert rv._heads("≥ 60,0 cm (εκτίμηση 58,9, εύρος 57,0 – 60,8)") == ["≥ 60,0 cm"]
+
+
+def test_missing_lines_say_what_to_fill():
+    groups, _ = rv.results(person(), al.Measures())
+    g = {x.title: x for x in groups}
+    r = rows_of(groups)
+    assert r["Σκελετικοί μύες"].value is None and r["Λοιποί ιστοί"].value is None
+    assert g["Ιστοί (Α)"].todo == "Για τις γραμμές που λείπουν συμπλήρωσε στη «Μέτρηση» → «Ζυγαριά»: Μύες %."
+    assert r["Ξηρή άλιπη μάζα"].value is None and r["Νερό"].value.endswith("(υπολογισμένη)")
+    assert g["Συστατικά (Β)"].todo.endswith(": Οστά %, Υγρά %.") or g["Συστατικά (Β)"].todo.endswith(": Υγρά %, Οστά %.")
+    full = {x.title: x for x in rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])[0]}
+    assert full["Ιστοί (Α)"].todo is None and full["Συστατικά (Β)"].todo is None
+
+
+def test_ab_letters_follow_the_screen_headings():
+    groups, _ = rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])
+    msgs = [m for g in groups for c in g.cards for m in c.messages]
+    assert any(m.startswith("Δύο τρόποι ανάλυσης") and rv._AB_SCREEN in m for m in msgs)
+    assert not any(rv._AB_CODE in m for m in msgs)
 
 
 def test_basics_and_start_values_come_from_the_code():
@@ -132,27 +207,23 @@ def test_basics_and_start_values_come_from_the_code():
     assert [round(p.bmi, 1) for p in points] == [25.3, 21.6]
 
 
-def test_headline():
-    c = {x.title: x for x in cards(rv.results(*CASES["άνδρας 139 kg, χωρίς μετρήσεις"])[0])}
-    assert rv.headline(c["Βάρος"]) == ("Βάρος", "138,9 kg", ())
-    waist_only = {x.title: x for x in cards(rv.results(person(), al.Measures(waist_cm=146.0))[0])}
-    v = waist_only["Σπλαχνικό λίπος"]  # λείπει ο άνω μηρός: δεν υπολογίζεται, και ο λόγος μένει στο ⓘ
-    assert rv.headline(v) == ("Σπλαχνικό λίπος", rv.NOT_COMPUTED, ()) and v.messages
-    full = {x.title: x for x in cards(rv.results(*CASES["άνδρας 139 kg, όλα τα πεδία"])[0])}
-    assert rv.headline(full["Ισχίο"]) == ("Ισχίο", "142,7 cm", ())
-    assert rv.headline(full["Λόγος μέσης / ισχίου"])[:2] == ("Λόγος μέσης / ισχίου", "1,02")
-    title, value, rest = rv.headline(full["Μπράτσο και δικέφαλος"])
-    assert value is None and rest[0] == ("Μπράτσο χαλαρό", "40,0 cm")
-    assert rv.headline(full["Ανάλυση άλιπης μάζας"]) == ("Ανάλυση άλιπης μάζας", None, ())  # έχει πίνακα
-    assert rv.headline(full["Μέση"]) == ("Μέση", "146,0 cm", ())
-    assert rv.headline(full["Ξηροί μύες"])[0] == "Ξηροί μύες (εκτίμηση)"  # η λέξη «εκτίμηση» δεν χάνεται
-    assert rv.headline(full["Δείκτης Άλιπης Μάζας (ΔΑΜ)"])[:2] == ("Δείκτης Άλιπης Μάζας (ΔΑΜ)", "25,2 kg/m²")
-    no_shoulders = {x.title: x for x in cards(rv.results(person(), al.Measures(waist_cm=146.0, chest_cm=131.5))[0])}
-    for c in no_shoulders.values():  # «δεν υπολογίστηκε» μόνο όταν η κάρτα δεν έχει καμία γραμμή
-        if rv.headline(c)[1] == rv.NOT_COMPUTED:
-            assert not (c.main or c.targets or c.details or c.table) and c.messages
+def test_headline_for_cards_without_row_spec():
+    c = {x.title: x for g in rv.results(*CASES["Professional"])[0] for x in g.cards}
+    assert rv.headline(c["Σκελετός"]) == ("Σκελετός", None, c["Σκελετός"].main)  # μόνο τίτλος, γραμμές από κάτω
+    sk = c["Σκελετός"].rows[0]
+    assert sk.value is None and sk.missing == "" and ("Σκελετός", "Μεσαίος") in sk.subs
+    assert rv.headline(c["Εκτομορφία"])[:2] == ("Εκτομορφία", c["Εκτομορφία"].main[0][1])
+    assert rv.headline(rv.Card("Χ"))[1] == rv.NOT_COMPUTED
 
 
 def test_error_goes_through_unchanged():
     bad = person(height_cm=20.0)
     assert rv.results(bad, al.Measures()) == ((), al.measurement_sections(bad, al.Measures())[1])
+
+
+def test_no_calculation_module_changed():
+    # η παρουσίαση δεν γράφει σε κανένα module υπολογισμού: δεν εισάγεται από αυτά
+    src = Path(__file__).resolve().parents[1] / "src" / "davinci"
+    for f in src.glob("*.py"):
+        if f.name != "results_view.py":
+            assert "results_view" not in f.read_text(encoding="utf-8"), f.name
